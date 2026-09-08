@@ -1,4 +1,4 @@
-name: fixe mir Smokin' Guns for RK3326 (PortMaster)
+name: fixxe mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -44,9 +44,10 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
+          # IMPORTANT: Use libsdl2-dev instead of libsdl1.2-dev for SDL2 support
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
-            libsdl1.2-dev libsdl2-dev \
+            libsdl2-dev libsdl2-image-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
@@ -72,9 +73,13 @@ jobs:
             -DSTATICLIB=OFF -DDEFAULT_ES=2
           make -j"$(nproc)"
           cd /work/src
+          # Copy both libGL.so.1 and libEGL.so.1 to libs.aarch64
           GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
+          EGL_LIB="$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)"
           if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
+          if [ -z "$EGL_LIB" ]; then echo "ERROR: libEGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
+          cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
 
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
@@ -83,12 +88,12 @@ jobs:
           echo "==> Running architecture patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Starting make..."
+          echo "==> Starting make (with SDL2 support)..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
+            USE_SDL2=1 BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
@@ -99,43 +104,32 @@ jobs:
           cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          # Copy any shared libraries from the build
+          # Copy renderer .so files
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
 
-          # Pack the QVM game logic into z_vm.pk3
+          # Pack QVM game logic into z_vm.pk3
           echo "==> Packing QVM files into z_vm.pk3..."
-          # Find all .qvm files under the build directory (this includes qagame, cgame, ui)
           QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
           if [ -n "$QVM_FILES" ]; then
-            # Create a temporary directory and copy the .qvm files into it, preserving relative paths
             rm -rf /tmp/vm_pack
             mkdir -p /tmp/vm_pack
             for f in $QVM_FILES; do
-              # Get relative path from BUILD_OUT to the file
               rel="${f#$BUILD_OUT/}"
               mkdir -p "/tmp/vm_pack/$(dirname "$rel")"
               cp "$f" "/tmp/vm_pack/$rel"
               echo "  Added: $rel"
             done
-            # Zip the entire temporary directory into z_vm.pk3
             ( cd /tmp/vm_pack && zip -r /work/out/game/z_vm.pk3 . )
             echo "z_vm.pk3 created."
           else
-            # Fallback: try to find a vm directory and zip it
-            echo "No .qvm files found, checking for vm directory..."
-            VM_DIR="$(find "$BUILD_OUT" -type d -name vm -print -quit)"
-            if [ -n "$VM_DIR" ]; then
-              ( cd "$(dirname "$VM_DIR")" && zip -r /work/out/game/z_vm.pk3 "$(basename "$VM_DIR")" )
-              echo "z_vm.pk3 created from vm directory."
-            else
-              echo "ERROR: No QVM files or vm directory found!" >&2
-              exit 1
-            fi
+            echo "ERROR: No QVM files found!" >&2
+            exit 1
           fi
 
           file /work/out/game/smokinguns.aarch64
           file /work/out/game/z_vm.pk3
           file /work/out/libs.aarch64/libGL.so.1
+          file /work/out/libs.aarch64/libEGL.so.1
           echo "Build finished successfully."
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
@@ -163,7 +157,9 @@ jobs:
             exit 1
           fi
 
+          # Copy both GL and EGL libraries
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
+          cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
 
           cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" <<'PLACEHOLDER_EOF'
           Copy your own legally obtained Smokin' Guns .pk3 data files
@@ -248,7 +244,8 @@ jobs:
               |-- smokinguns.gptk
               |-- port.json
               |-- libs.aarch64/
-              |   `-- libGL.so.1
+              |   |-- libGL.so.1
+              |   `-- libEGL.so.1
               `-- smokinguns/
                   |-- z_vm.pk3
                   `-- sg_pak0.pk3
@@ -279,12 +276,13 @@ jobs:
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOINTOVLHACK=1
-          export SDL_VIDEODRIVER=kmsdrm
+          # Use SDL2 KMSDRM driver (correct for RK3326)
+          export SDL_VIDEODRIVER=KMSDRM
           export SDL_AUDIODRIVER=alsa
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
 
-          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1" \
+          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
             +set r_mode -1 \
