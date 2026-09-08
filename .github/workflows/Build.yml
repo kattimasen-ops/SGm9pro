@@ -87,107 +87,107 @@ jobs:
           cp gl4es/lib/libGL.so.1 release/smokinguns/libs.aarch64/
 
           # 1. Generate Launch Script
-          cat << 'EOF' > "release/Smokin Guns.sh"
-#!/bin/bash
-XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+          cat << 'EOF' | sed 's/^[ \t]*//' > "release/Smokin Guns.sh"
+          #!/bin/bash
+          XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 
-if [ -d "/opt/system/Tools/PortMaster/" ]; then
-  CONTROL_FOLDER="/opt/system/Tools/PortMaster"
-elif [ -d "/opt/tools/PortMaster/" ]; then
-  CONTROL_FOLDER="/opt/tools/PortMaster"
-elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
-  CONTROL_FOLDER="$XDG_DATA_HOME/PortMaster"
-else
-  CONTROL_FOLDER="/roms/ports/PortMaster"
-fi
+          if [ -d "/opt/system/Tools/PortMaster/" ]; then
+            CONTROL_FOLDER="/opt/system/Tools/PortMaster"
+          elif [ -d "/opt/tools/PortMaster/" ]; then
+            CONTROL_FOLDER="/opt/tools/PortMaster"
+          elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
+            CONTROL_FOLDER="$XDG_DATA_HOME/PortMaster"
+          else
+            CONTROL_FOLDER="/roms/ports/PortMaster"
+          fi
 
-source $CONTROL_FOLDER/control.txt
-[ -f "${CONTROL_FOLDER}/mod_script.sh" ] && source "${CONTROL_FOLDER}/mod_script.sh"
-get_controls
+          source $CONTROL_FOLDER/control.txt
+          [ -f "${CONTROL_FOLDER}/mod_script.sh" ] && source "${CONTROL_FOLDER}/mod_script.sh"
+          get_controls
 
-GAMEDIR="/$DIRECTORY/ports/smokinguns"
-cd $GAMEDIR
+          GAMEDIR="/$DIRECTORY/ports/smokinguns"
+          cd $GAMEDIR
 
-$ESUDO chmod +x $GAMEDIR/smokinguns.aarch64
+          $ESUDO chmod +x $GAMEDIR/smokinguns.aarch64
 
-export LD_LIBRARY_PATH="$GAMEDIR/libs.aarch64:$LD_LIBRARY_PATH"
-export LIBGL_ES=2
-export LIBGL_GL=21
-export LIBGL_FB=4
-export LIBGL_DEFAULT_FBO=1
+          export LD_LIBRARY_PATH="$GAMEDIR/libs.aarch64:$LD_LIBRARY_PATH"
+          export LIBGL_ES=2
+          export LIBGL_GL=21
+          export LIBGL_FB=4
+          export LIBGL_DEFAULT_FBO=1
 
-$GPTOKEYB "smokinguns.aarch64" -c "$GAMEDIR/smokinguns.gptk" &
+          $GPTOKEYB "smokinguns.aarch64" -c "$GAMEDIR/smokinguns.gptk" &
 
-./smokinguns.aarch64 \
-  +set r_customwidth $DISPLAY_WIDTH \
-  +set r_customheight $DISPLAY_HEIGHT \
-  +set r_mode -1 \
-  +set r_fullscreen 1 \
-  +set r_swapInterval 1 \
-  +set s_useOpenAL 1 \
-  +set com_hunkMegs 256
+          ./smokinguns.aarch64 \
+            +set r_customwidth $DISPLAY_WIDTH \
+            +set r_customheight $DISPLAY_HEIGHT \
+            +set r_mode -1 \
+            +set r_fullscreen 1 \
+            +set r_swapInterval 1 \
+            +set s_useOpenAL 1 \
+            +set com_hunkMegs 256
 
-$ESUDO killall gptokeyb
-EOF
+          $ESUDO killall gptokeyb
+          EOF
           chmod +x "release/Smokin Guns.sh"
 
           # 2. Generate GPToKeyB Input Config
-          cat << 'EOF' > release/smokinguns/smokinguns.gptk
-back = esc
-start = enter
-a = space
-b = leftctrl
-x = r
-y = e
-l1 = mouse_right
-r1 = mouse_left
-up = w
-down = s
-left = a
-right = d
-left_analog_up = w
-left_analog_down = s
-left_analog_left = a
-left_analog_right = d
-right_analog_up = mouse_movement_up
-right_analog_down = mouse_movement_down
-right_analog_left = mouse_movement_left
-right_analog_right = mouse_movement_right
-deadzone = 4000
-EOF
+          cat << 'EOF' | sed 's/^[ \t]*//' > release/smokinguns/smokinguns.gptk
+          back = esc
+          start = enter
+          a = space
+          b = leftctrl
+          x = r
+          y = e
+          l1 = mouse_right
+          r1 = mouse_left
+          up = w
+          down = s
+          left = a
+          right = d
+          left_analog_up = w
+          left_analog_down = s
+          left_analog_left = a
+          left_analog_right = d
+          right_analog_up = mouse_movement_up
+          right_analog_down = mouse_movement_down
+          right_analog_left = mouse_movement_left
+          right_analog_right = mouse_movement_right
+          deadzone = 4000
+          EOF
 
           # 3. Generate Port Metadata
-          cat << 'EOF' > release/smokinguns/port.json
-{
-  "version": 1,
-  "name": "smokinguns.zip",
-  "items": [
-    "Smokin Guns.sh",
-    "smokinguns"
-  ],
-  "items_opt": [],
-  "attr": {
-    "title": "Smokin Guns",
-    "desc": "Western FPS powered by ioquake3 engine.",
-    "inst": "Copy game PK3 files into ports/smokinguns/smokinguns/",
-    "author": "Smokin Guns Team",
-    "porter": "Custom",
-    "category": "fps",
-    "runtimes": [],
-    "reqs": []
-  }
-}
-EOF
+          cat << 'EOF' | sed 's/^[ \t]*//' > release/smokinguns/port.json
+          {
+            "version": 1,
+            "name": "smokinguns.zip",
+            "items": [
+              "Smokin Guns.sh",
+              "smokinguns"
+            ],
+            "items_opt": [],
+            "attr": {
+              "title": "Smokin Guns",
+              "desc": "Western FPS powered by ioquake3 engine.",
+              "inst": "Copy game PK3 files into ports/smokinguns/smokinguns/",
+              "author": "Smokin Guns Team",
+              "porter": "Custom",
+              "category": "fps",
+              "runtimes": [],
+              "reqs": []
+            }
+          }
+          EOF
 
           # 4. Generate README
-          cat << 'EOF' > release/smokinguns/README.md
-# Smokin Guns PortMaster Build for M9 Pro (RK3326)
+          cat << 'EOF' | sed 's/^[ \t]*//' > release/smokinguns/README.md
+          # Smokin Guns PortMaster Build for M9 Pro (RK3326)
 
-## Setup Instructions
-1. Unzip the artifact into `/roms/ports/`.
-2. Place the game's official assets (`.pk3` files) into `/roms/ports/smokinguns/smokinguns/`.
-3. Launch `Smokin Guns.sh` from the Ports menu.
-EOF
+          ## Setup Instructions
+          1. Unzip the artifact into `/roms/ports/`.
+          2. Place the game's official assets (`.pk3` files) into `/roms/ports/smokinguns/smokinguns/`.
+          3. Launch `Smokin Guns.sh` from the Ports menu.
+          EOF
 
           # Zip everything up into final PortMaster package
           cd release
