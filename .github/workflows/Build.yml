@@ -1,4 +1,4 @@
-name: Bastelmir Smokin' Guns for RK3326 (PortMaster)
+name: Baue mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,6 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          # Comprehensive dependencies: include every codec and library that Smokin' Guns may need
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
             libsdl1.2-dev libsdl2-dev \
@@ -50,7 +49,6 @@ jobs:
             libx11-dev libxext-dev libgl1-mesa-dev
           git config --global --add safe.directory '*'
 
-          # CMake for GL4ES (ARM64 build)
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
@@ -58,7 +56,6 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
           cmake --version
 
-          # Build GL4ES
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -74,7 +71,6 @@ jobs:
           if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
 
-          # Build Smokin' Guns
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
@@ -88,9 +84,11 @@ jobs:
               with open("Makefile", "r") as f:
                   mcontent = f.read()
               patch_flags = "\noverride CFLAGS += -I/usr/include/SDL -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
+              # Force renderer selections
+              patch_flags += "\noverride BUILD_RENDERER_OPENGL1=1\noverride BUILD_RENDERER_OPENGL2=0\n"
               with open("Makefile", "w") as f:
                   f.write(patch_flags + mcontent)
-              print("[PATCHED] Added global override CFLAGS to Makefile")
+              print("[PATCHED] Added global override CFLAGS and renderer flags to Makefile")
 
           # 2. Patch q_platform.h and inject fallbacks into all source files
           for root, dirs, files in os.walk("code"):
@@ -99,7 +97,6 @@ jobs:
                   if file == "q_platform.h":
                       with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                           content = f.read()
-                      # Replace architecture error with ARM64 support
                       if "#error \"Architecture not supported\"" in content:
                           arm64_block = """
           #elif defined(__aarch64__) || defined(__arm64__) || defined(aarch64)
@@ -113,7 +110,6 @@ jobs:
           #error "Architecture not supported"
           """
                           content = content.replace("#error \"Architecture not supported\"", arm64_block)
-                          # Guard all existing Q3_LITTLE_ENDIAN definitions
                           content = content.replace("#define Q3_LITTLE_ENDIAN", "#ifndef Q3_LITTLE_ENDIAN\n#define Q3_LITTLE_ENDIAN\n#endif")
                           with open(filepath, "w", encoding="utf-8") as f:
                               f.write(content)
@@ -122,7 +118,6 @@ jobs:
                   elif file.endswith((".c", ".h")):
                       with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                           content = f.read()
-                      # Only inject ARCH_STRING if not already present
                       if "ARCH_STRING" not in content:
                           content = "#ifndef ARCH_STRING\n#define ARCH_STRING \"aarch64\"\n#endif\n" + content
                           with open(filepath, "w", encoding="utf-8") as f:
@@ -130,12 +125,12 @@ jobs:
                           print(f"[PATCHED] Injected ARCH_STRING fallback: {filepath}")
           '
 
-          # Disable renderergl2, enable renderergl1 (OpenGL ES 2.0 compatible)
+          # Now run make with the correct variable names
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            BUILD_RENDERERGL2=0 BUILD_RENDERERGL1=1 \
+            BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
