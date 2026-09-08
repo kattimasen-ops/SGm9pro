@@ -1,4 +1,4 @@
-name: knobel mir Smokin' Guns for RK3326 (PortMaster)
+name: milo mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -55,6 +55,7 @@ jobs:
             libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev
           git config --global --add safe.directory '*'
 
+          # CMake for GL4ES
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
@@ -89,13 +90,12 @@ jobs:
           cd sdl12-compat
           mkdir -p build
           cd build
-          # Patch CFLAGS to define missing SDL2 hints for older SDL2 versions
+          # Define missing SDL2 hints for older SDL2 versions
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
             -DCMAKE_C_FLAGS="-DSDL_HINT_VIDEODRIVER=\\\"SDL_VIDEODRIVER\\\" -DSDL_HINT_AUDIODRIVER=\\\"SDL_AUDIODRIVER\\\""
           make -j"$(nproc)"
-          # The library is built as libSDL-1.2.so.0 in the build directory
           SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
           if [ -z "$SDL12_COMPAT_LIB" ]; then echo "ERROR: libSDL-1.2.so.0 was not produced" >&2; exit 1; fi
           cp "$SDL12_COMPAT_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
@@ -125,17 +125,18 @@ jobs:
           chmod +x /work/out/game/smokinguns.aarch64
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
 
+          # Pack QVM game logic into z_vm.pk3 with correct vm/ directory structure
+          echo "==> Packing QVM files into z_vm.pk3..."
           QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
           if [ -n "$QVM_FILES" ]; then
             rm -rf /tmp/vm_pack
-            mkdir -p /tmp/vm_pack
+            mkdir -p /tmp/vm_pack/vm
             for f in $QVM_FILES; do
-              rel="${f#$BUILD_OUT/}"
-              mkdir -p "/tmp/vm_pack/$(dirname "$rel")"
-              cp "$f" "/tmp/vm_pack/$rel"
+              cp "$f" "/tmp/vm_pack/vm/$(basename "$f")"
+              echo "  Added: vm/$(basename "$f")"
             done
             ( cd /tmp/vm_pack && zip -r /work/out/game/z_vm.pk3 . )
-            echo "z_vm.pk3 created."
+            echo "z_vm.pk3 created with correct vm/ structure."
           else
             echo "ERROR: No QVM files found!" >&2
             exit 1
@@ -280,9 +281,12 @@ jobs:
             left stick moves (WASD), the right stick drives the mouse look.
           README_EOF
 
+          # Create launch script with offline/online toggle
           cat > "$PKG/Smokin Guns.sh" <<'LAUNCH_EOF'
           #!/bin/bash
           # PortMaster launch script for Smokin' Guns (RK3326 / M9 Pro)
+
+          PLAY_MODE="online"   # Change to 'offline' for max FPS vs bots
 
           controlfolder="/roms/ports"
           [ -f "${controlfolder}/portmaster.sh" ] && source "${controlfolder}/portmaster.sh"
@@ -290,23 +294,20 @@ jobs:
           GAMEDIR="/roms/ports/smokinguns"
           cd "$GAMEDIR" || exit 1
 
-          # Check if GPTOKEYB is set; if not, try to find it or skip
-          if [ -z "$GPTOKEYB" ]; then
-              GPTOKEYB="$(command -v gptokeyb 2>/dev/null || true)"
-          fi
-          if [ -n "$GPTOKEYB" ]; then
-              "$GPTOKEYB" "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
-              GPTOKEYB_PID=$!
-          else
-              echo "GPTOKEYB not found - gamepad controls disabled."
-          fi
-
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOINTOVLHACK=1
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
+
+          $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
+
+          if [ "$PLAY_MODE" = "online" ]; then
+              EXTRA_SETTINGS=""
+          else
+              EXTRA_SETTINGS="+set sv_pure 0 +set vm_cgame 0 +set vm_game 0 +set vm_ui 0"
+          fi
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
@@ -317,11 +318,10 @@ jobs:
             +set r_fullscreen 1 \
             +set fs_basepath "${GAMEDIR}" \
             +set fs_homepath "${GAMEDIR}" \
-            +set fs_game smokinguns
+            +set fs_game smokinguns \
+            $EXTRA_SETTINGS
 
-          if [ -n "$GPTOKEYB_PID" ]; then
-              kill "$GPTOKEYB_PID" 2>/dev/null
-          fi
+          kill_gptokeyb
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
 
