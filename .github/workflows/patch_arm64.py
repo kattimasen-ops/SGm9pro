@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Patch Smokin' Guns for ARM64 (aarch64) cross-compilation with SDL2.
+Patch Smokin' Guns for ARM64 (aarch64) cross-compilation.
 Run this script from the SmokinGuns root directory.
 """
 
@@ -16,23 +16,21 @@ def patch_makefile():
     with open(makefile, "r") as f:
         content = f.read()
 
-    # Set SDL2 include path and force renderer selections
+    # Force architecture defines and renderer selections. 
+    # Keep SDL 1.2 include path (/usr/include/SDL) - do NOT use SDL2 includes!
     patch = """
-override CFLAGS += -I/usr/include/SDL2 -DARCH_STRING=\\"aarch64\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1
+override CFLAGS += -I/usr/include/SDL -DARCH_STRING=\\"aarch64\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1
 override BUILD_RENDERER_OPENGL1=1
 override BUILD_RENDERER_OPENGL2=0
 Q3LCC_CFLAGS += -DARCH_STRING=\\"aarch64\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1
 override ARCH_STRING = aarch64
-override USE_SDL2=1
-override SDL_CFLAGS=-I/usr/include/SDL2
-override SDL_LIBS=-lSDL2
 """
 
     content = patch + content
     with open(makefile, "w") as f:
         f.write(content)
 
-    print("[PATCHED] Makefile (SDL2 paths added)")
+    print("[PATCHED] Makefile (SDL 1.2 includes preserved)")
 
 def patch_q_platform():
     patched = 0
