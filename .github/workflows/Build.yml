@@ -1,4 +1,4 @@
-name: Back mir Smokin' Guns for RK3326 (PortMaster)
+name: fick mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -29,6 +29,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Copy patch script into work directory
+        run: cp "$GITHUB_WORKSPACE/.github/workflows/patch_arm64.py" work/
+
       - name: Write in-container build script
         run: |
           mkdir -p work/src work/out/game work/out/libs.aarch64
@@ -49,6 +52,7 @@ jobs:
             libx11-dev libxext-dev libgl1-mesa-dev
           git config --global --add safe.directory '*'
 
+          # CMake for GL4ES
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
@@ -56,6 +60,7 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
           cmake --version
 
+          # Build GL4ES
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -71,136 +76,15 @@ jobs:
           if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
 
+          # Build Smokin' Guns
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
-          echo "==> Applying comprehensive ARM64 patches..."
-          # Write Python patch script to a file to avoid quoting issues
-          cat > /tmp/patch_arm64.py <<'PYTHON_EOF'
-          import os
+          echo "==> Running architecture patch script..."
+          python3 /work/patch_arm64.py
 
-          # Patch Makefile: force architecture defines globally
-          if os.path.exists("Makefile"):
-              with open("Makefile", "r") as f:
-                  mcontent = f.read()
-              # Add global CFLAGS and renderer settings
-              patch_flags = "\noverride CFLAGS += -I/usr/include/SDL -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
-              patch_flags += "\noverride BUILD_RENDERER_OPENGL1=1\noverride BUILD_RENDERER_OPENGL2=0\n"
-              # Add defines for Q3LCC (QVM compiler)
-              patch_flags += "\nQ3LCC_CFLAGS += -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
-              # Also force ARCH_STRING for the tools (lcc etc.)
-              patch_flags += "\noverride ARCH_STRING = aarch64\n"
-              with open("Makefile", "w") as f:
-                  f.write(patch_flags + mcontent)
-              print("[PATCHED] Makefile overrides added")
-
-          # Patch q_platform.h files: insert __aarch64__ definition and replace #error with aarch64 case
-          for root, dirs, files in os.walk("code"):
-              for file in files:
-                  if file == "q_platform.h":
-                      filepath = os.path.join(root, file)
-                      with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                          lines = f.readlines()
-                      
-                      # Ensure __aarch64__ is defined at the top (before any include guard)
-                      if not any("#ifndef __aarch64__" in line for line in lines):
-                          # Insert after the first line (typically a comment or #ifndef guard)
-                          # We'll insert at the beginning to guarantee it's defined.
-                          lines.insert(0, "#ifndef __aarch64__\n#define __aarch64__ 1\n#endif\n")
-                      
-                      # Now replace the line containing #error "Architecture not supported" with a proper elif block
-                      new_lines = []
-                      i = 0
-                      while i < len(lines):
-                          line = lines[i]
-                          if "#error \"Architecture not supported\"" in line:
-                              # We need to replace this line with a #elif block, but we also need to ensure
-                              # that there is an #else before this #error. In the original, it's:
-                              # #else
-                              # #error "Architecture not supported"
-                              # We can just replace the #error line with a #elif block, but that won't work
-                              # because #elif must be part of an #if/#elif chain. So we need to find the
-                              # preceding #else line and replace both.
-                              # Simpler: replace the entire block from #else to #error with aarch64 case.
-                              # We'll look backwards for the #else line.
-                              # We'll just replace this line with a #elif block and keep the #else after it.
-                              # Actually, the original structure is:
-                              # ... #if defined(...) ... #else #error "..." #endif
-                              # We can change #else to #elif defined(__aarch64__) ... then leave #error after it.
-                              # But we need an #else after the elif. So we'll replace the #else with:
-                              # #elif defined(__aarch64__) || defined(__arm64__) || defined(aarch64)
-                              # #ifndef ARCH_STRING
-                              # #define ARCH_STRING "aarch64"
-                              # #endif
-                              # #ifndef Q3_LITTLE_ENDIAN
-                              # #define Q3_LITTLE_ENDIAN
-                              # #endif
-                              # #else
-                              # and then keep the following #error line.
-                              # So we'll replace the line that starts with "#else" (before #error) with the new elif chain.
-                              # Actually, we can just append a new #elif before the #else? That's tricky.
-                              # Instead, we can directly replace the line that has #error with nothing, and add a new
-                              # #elif block before it? Let's take a simpler approach: we'll just define __aarch64__ and
-                              # also we can patch the conditional to check for __aarch64__ first. But since __aarch64__ is
-                              # now defined, the existing #if chain might already have a branch for it. If not, we can
-                              # just replace the #else with a #elif that matches __aarch64__ and then re-add #else.
-                              # We'll modify the line that contains "#else" that is immediately before the #error.
-                              # We'll detect the pattern: if we see a line starting with "#else" and the next line contains "#error \"Architecture not supported\"",
-                              # we replace that "#else" line with the aarch64 elif block and keep the #error as #else.
-                              # But that requires looking ahead.
-                              # We'll implement a simpler method: find the index of the line containing #error "Architecture not supported".
-                              # Then look backwards for the nearest line starting with "#else". Replace that line with the elif block.
-                              # We'll do this by scanning and modifying.
-                              # For now, we'll do a global replacement of the entire #else block.
-                              # Actually, we can replace the line containing #error with nothing, and also replace the previous #else with a #elif.
-                              # Let's do a more direct approach: read the whole content, then use string replace.
-                              # Since we are processing line-by-line, we'll collect all lines and then do a replacement on the whole text.
-                              # We'll switch to string-based method.
-                              pass
-                      # This loop is incomplete; instead, we'll handle at the end.
-                      # Let's fallback to a string replace on the whole content.
-                      # Re-read the whole content and do a simple replace.
-                      with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                          content = f.read()
-                      # Add __aarch64__ definition if not present
-                      if "#ifndef __aarch64__" not in content:
-                          content = "#ifndef __aarch64__\n#define __aarch64__ 1\n#endif\n" + content
-                      # Replace the exact string "#else\n#error \"Architecture not supported\"" with the aarch64 block
-                      # This pattern works if the lines are exactly "#else" and next line "#error "Architecture not supported""
-                      # with possible spaces. We'll use a simple replace.
-                      old = '#else\n#error "Architecture not supported"'
-                      new = (
-                          '#elif defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n'
-                          '#ifndef ARCH_STRING\n'
-                          '#define ARCH_STRING "aarch64"\n'
-                          '#endif\n'
-                          '#ifndef Q3_LITTLE_ENDIAN\n'
-                          '#define Q3_LITTLE_ENDIAN\n'
-                          '#endif\n'
-                          '#else\n'
-                          '#error "Architecture not supported"'
-                      )
-                      if old in content:
-                          content = content.replace(old, new)
-                      else:
-                          # Try alternative: maybe there's a space or different spacing
-                          # If not found, just replace the #error line with a harmless define? 
-                          # We'll just replace the #error line with an empty or a #elif? 
-                          # Actually, we can prepend a #if defined(__aarch64__) block before the #else? 
-                          # For safety, we'll replace all occurrences of '#error "Architecture not supported"' with '#elif defined(__aarch64__)\n#define ARCH_STRING "aarch64"\n#define Q3_LITTLE_ENDIAN\n#else\n#error "Architecture not supported"'
-                          content = content.replace('#error "Architecture not supported"', 
-                              '#elif defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n'
-                              '#ifndef ARCH_STRING\n#define ARCH_STRING "aarch64"\n#endif\n'
-                              '#ifndef Q3_LITTLE_ENDIAN\n#define Q3_LITTLE_ENDIAN\n#endif\n'
-                              '#else\n#error "Architecture not supported"')
-                      with open(filepath, "w", encoding="utf-8") as f:
-                          f.write(content)
-                      print(f"[PATCHED] {filepath}")
-          PYTHON_EOF
-          python3 /tmp/patch_arm64.py
-
-          # Now run make with correct variables
+          echo "==> Starting make..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
