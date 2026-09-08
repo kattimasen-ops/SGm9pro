@@ -1,85 +1,89 @@
 name: Build Smokin Guns PortMaster (RK3326 / ArkOS)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
 
 jobs:
-  build-aarch64:
+  build-portmaster:
     runs-on: ubuntu-latest
-    container:
-      image: ubuntu:20.04
 
     steps:
-      - name: Install Build Dependencies & ARM64 Cross Toolchain
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          dpkg --add-architecture arm64
-          apt-get update && apt-get install -y \
-            build-essential \
-            crossbuild-essential-arm64 \
-            cmake \
-            git \
-            zip \
-            pkg-config \
-            libsdl2-dev:arm64 \
-            libopenal-dev:arm64 \
-            libcurl4-openssl-dev:arm64 \
-            libgl1-mesa-dev:arm64 \
-            libgles2-mesa-dev:arm64 \
-            libgbm-dev:arm64
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Build GL4ES (GLES2 OpenGL Translator for Mali-G31)
-        run: |
-          git clone --depth 1 https://github.com/ptitSeb/gl4es.git
-          cd gl4es
-          mkdir build && cd build
-          cmake .. \
-            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DNOX11=ON \
-            -DGLX_STUBS=ON \
-            -DEGL_WRAPPER=ON \
-            -DGBM=ON \
-            -DSTATICLIB=OFF
-          make -j$(nproc)
+      - name: Set up QEMU for ARM64 Emulation
+        uses: docker/setup-qemu-action@v3
 
-      - name: Clone Smokin Guns Source
+      - name: Build Engine and Libraries in Ubuntu 20.04 ARM64 Container
         run: |
-          git clone --depth 1 https://github.com/smokin-guns/SmokinGuns.git engine-src
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            arm64v8/ubuntu:20.04 bash -c '
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
 
-      - name: Compile Engine for RK3326 (Cortex-A35)
-        run: |
-          cd engine-src
-          make -j$(nproc) \
-            ARCH=aarch64 \
-            CC=aarch64-linux-gnu-gcc \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            USE_OPENAL=1 \
-            USE_OPENAL_DLOPEN=1 \
-            USE_CURL=1 \
-            USE_CURL_DLOPEN=1 \
-            USE_CODEC_VORBIS=1 \
-            OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math" \
-            BUILD_CLIENT=1 \
-            BUILD_SERVER=0
+              # 1. Install native ARM64 build tools & dependencies
+              apt-get update && apt-get install -y --no-install-recommends \
+                build-essential cmake git zip pkg-config ca-certificates \
+                libsdl2-dev libopenal-dev libcurl4-openssl-dev \
+                libgl1-mesa-dev libgles2-mesa-dev libgbm-dev
 
-      - name: Generate PortMaster Files & Assemble Package
+              # 2. Build GL4ES (GLES2 to Desktop OpenGL translator)
+              git clone --depth 1 https://github.com/ptitSeb/gl4es.git
+              cd gl4es && mkdir build && cd build
+              cmake .. \
+                -DNOX11=ON \
+                -DGLX_STUBS=ON \
+                -DEGL_WRAPPER=ON \
+                -DGBM=ON \
+                -DSTATICLIB=OFF
+              make -j$(nproc)
+              cd /workspace
+
+              # 3. Clone Smokin Guns engine source
+              git clone --depth 1 https://github.com/smokin-guns/SmokinGuns.git engine-src
+              cd engine-src
+
+              # 4. Compile engine with RK3326 Cortex-A35 optimizations
+              make -j$(nproc) \
+                ARCH=aarch64 \
+                USE_OPENAL=1 \
+                USE_OPENAL_DLOPEN=1 \
+                USE_CURL=1 \
+                USE_CURL_DLOPEN=1 \
+                USE_CODEC_VORBIS=1 \
+                OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math" \
+                BUILD_CLIENT=1 \
+                BUILD_SERVER=0
+            '
+
+      - name: Package PortMaster Files and Scripts
         run: |
+          set -euo pipefail
+
+          # Create directory structure
           mkdir -p release/smokinguns/libs.aarch64
           mkdir -p release/smokinguns/smokinguns
 
-          # 1. Copy Binary & Game Dynamic Libraries
-          BIN_PATH=$(find engine-src/build -name "smokinguns.aarch64" -o -name "ioquake3.aarch64" | head -n 1)
-          cp "$BIN_PATH" release/smokinguns/smokinguns.aarch64
+          # Find and copy executable binary
+          BIN_FILE=$(find engine-src/build -type f \( -name "smokinguns.aarch64" -o -name "ioquake3.aarch64" -o -name "smokinguns" \) | head -n 1)
+          if [ -z "$BIN_FILE" ]; then
+            echo "ERROR: Could not find compiled binary in engine-src/build"
+            exit 1
+          fi
+          cp "$BIN_FILE" release/smokinguns/smokinguns.aarch64
           chmod +x release/smokinguns/smokinguns.aarch64
 
-          find engine-src/build -name "*.aarch64.so" -exec cp {} release/smokinguns/smokinguns/ \; || true
+          # Copy compiled dynamic libraries (.so)
+          find engine-src/build -name "*.so" -exec cp {} release/smokinguns/smokinguns/ \; || true
+
+          # Copy GL4ES shared library
           cp gl4es/lib/libGL.so.1 release/smokinguns/libs.aarch64/
 
-          # 2. Auto-Generate PortMaster Launch Script (Smokin Guns.sh)
+          # Auto-generate PortMaster Launch Script
           cat << 'EOF' > "release/Smokin Guns.sh"
 #!/bin/bash
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -124,7 +128,7 @@ $ESUDO killall gptokeyb
 EOF
           chmod +x "release/Smokin Guns.sh"
 
-          # 3. Auto-Generate GPToKeyB Input Config (smokinguns.gptk)
+          # Auto-generate GPToKeyB Input Config
           cat << 'EOF' > release/smokinguns/smokinguns.gptk
 back = esc
 start = enter
@@ -149,7 +153,7 @@ right_analog_right = mouse_movement_right
 deadzone = 4000
 EOF
 
-          # 4. Auto-Generate Port Metadata (port.json)
+          # Auto-generate Port Metadata
           cat << 'EOF' > release/smokinguns/port.json
 {
   "version": 1,
@@ -172,7 +176,7 @@ EOF
 }
 EOF
 
-          # 5. Auto-Generate README
+          # Auto-generate README
           cat << 'EOF' > release/smokinguns/README.md
 # Smokin' Guns PortMaster Build for M9 Pro (RK3326)
 
@@ -182,8 +186,7 @@ EOF
 3. Launch `Smokin Guns.sh` from the Ports menu.
 EOF
 
-      - name: Create PortMaster Artifact Zip
-        run: |
+          # Create final ZIP archive
           cd release
           zip -r ../SmokinGuns-PortMaster-RK3326.zip "Smokin Guns.sh" smokinguns/
 
@@ -192,3 +195,4 @@ EOF
         with:
           name: SmokinGuns-PortMaster-RK3326
           path: SmokinGuns-PortMaster-RK3326.zip
+          if-no-files-found: error
