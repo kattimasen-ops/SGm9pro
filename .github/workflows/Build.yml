@@ -1,4 +1,4 @@
-name: Blfixxxe mir Smokin' Guns for RK3326 (PortMaster)
+name: fixxxe mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -44,10 +44,10 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          # Use libsdl2-dev for SDL2 support (KMSDRM)
+          # Install SDL1.2 headers and the SDL1.2-compat layer (provides SDL 1.2 API on top of SDL2 for KMSDRM)
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
-            libsdl2-dev libsdl2-image-dev \
+            libsdl1.2-dev libsdl1.2-compat \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
@@ -73,13 +73,15 @@ jobs:
             -DSTATICLIB=OFF -DDEFAULT_ES=2
           make -j"$(nproc)"
           cd /work/src
-          # Copy both libGL.so.1 and libEGL.so.1 to libs.aarch64
           GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
           EGL_LIB="$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)"
-          if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
-          if [ -z "$EGL_LIB" ]; then echo "ERROR: libEGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
+          if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced" >&2; exit 1; fi
+          if [ -z "$EGL_LIB" ]; then echo "ERROR: libEGL.so.1 was not produced" >&2; exit 1; fi
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
           cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
+
+          # Copy libsdl1.2-compat runtime library (provides SDL1.2 API on SDL2/KMSDRM)
+          cp /usr/lib/aarch64-linux-gnu/libSDL-1.2.so.0 /work/out/libs.aarch64/libSDL-1.2.so.0
 
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
@@ -88,28 +90,23 @@ jobs:
           echo "==> Running architecture patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Starting make (with SDL2 support)..."
+          echo "==> Starting make (with SDL 1.2 headers, compiled against libsdl1.2-compat)..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            USE_SDL2=1 BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
-            SDL_CFLAGS="-I/usr/include/SDL2" SDL_LIBS="-lSDL2" \
+            BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          if [ -z "$BUILD_OUT" ]; then echo "ERROR: could not locate SmokinGuns build output directory" >&2; find /work/src/SmokinGuns/build -maxdepth 1 -type d >&2 || true; exit 1; fi
+          if [ -z "$BUILD_OUT" ]; then echo "ERROR: could not locate build output" >&2; exit 1; fi
 
           CLIENT_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)"
-          if [ -z "$CLIENT_BIN" ]; then echo "ERROR: could not locate the compiled client binary in $BUILD_OUT" >&2; ls -la "$BUILD_OUT" >&2 || true; exit 1; fi
+          if [ -z "$CLIENT_BIN" ]; then echo "ERROR: could not locate client binary" >&2; exit 1; fi
           cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
-
-          # Copy renderer .so files
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
 
-          # Pack QVM game logic into z_vm.pk3
-          echo "==> Packing QVM files into z_vm.pk3..."
           QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
           if [ -n "$QVM_FILES" ]; then
             rm -rf /tmp/vm_pack
@@ -118,7 +115,6 @@ jobs:
               rel="${f#$BUILD_OUT/}"
               mkdir -p "/tmp/vm_pack/$(dirname "$rel")"
               cp "$f" "/tmp/vm_pack/$rel"
-              echo "  Added: $rel"
             done
             ( cd /tmp/vm_pack && zip -r /work/out/game/z_vm.pk3 . )
             echo "z_vm.pk3 created."
@@ -131,6 +127,7 @@ jobs:
           file /work/out/game/z_vm.pk3
           file /work/out/libs.aarch64/libGL.so.1
           file /work/out/libs.aarch64/libEGL.so.1
+          file /work/out/libs.aarch64/libSDL-1.2.so.0
           echo "Build finished successfully."
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
@@ -158,9 +155,9 @@ jobs:
             exit 1
           fi
 
-          # Copy both GL and EGL libraries
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
+          cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
           cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" <<'PLACEHOLDER_EOF'
           Copy your own legally obtained Smokin' Guns .pk3 data files
@@ -246,7 +243,8 @@ jobs:
               |-- port.json
               |-- libs.aarch64/
               |   |-- libGL.so.1
-              |   `-- libEGL.so.1
+              |   |-- libEGL.so.1
+              |   `-- libSDL-1.2.so.0
               `-- smokinguns/
                   |-- z_vm.pk3
                   `-- sg_pak0.pk3
@@ -256,6 +254,7 @@ jobs:
           - Rendering goes through GL4ES (GBM/EGL backend, no X11) to
             translate the engine's desktop OpenGL calls into the Mali-G31's
             native OpenGL ES 2.0.
+          - Audio/Video uses libsdl1.2-compat, which translates SDL 1.2 calls to SDL 2 (KMSDRM) for RK3326.
           - com_hunkMegs is capped at 256 in the launch script to keep the
             Linux OOM killer from terminating the game on this 1GB-RAM
             device.
@@ -277,13 +276,13 @@ jobs:
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOINTOVLHACK=1
-          # Use SDL2 KMSDRM driver (correct for RK3326)
+          # Uses SDL2 under the hood via libsdl1.2-compat - KMSDRM works!
           export SDL_VIDEODRIVER=KMSDRM
           export SDL_AUDIODRIVER=alsa
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
 
-          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
+          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
             +set r_mode -1 \
