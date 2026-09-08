@@ -1,10 +1,10 @@
-name: Baue Smokin' Guns for RK3326 (PortMaster)
+name: Baun soe mirSmokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/workflows/build-smokinguns.yml'
+      - '.github/workflows/Build2.yml'
 
 permissions:
   contents: read
@@ -39,7 +39,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           
-          # Updated to use libsdl1.2-dev instead of libsdl2-dev
+          # Using libsdl1.2-dev for ioquake3 / Smokin' Guns legacy SDL 1.2 compatibility
           apt-get update
           apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates wget file zip python3 libsdl1.2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
           git config --global --add safe.directory '*'
@@ -321,5 +321,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SmokinGuns-PortMaster-RK3326
-          path: `${{ env.ZIP_NAME }}`
+          path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
