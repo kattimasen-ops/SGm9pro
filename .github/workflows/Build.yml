@@ -1,4 +1,4 @@
-name: Baue mir Smokin' Guns for RK3326 (PortMaster)
+name: kau mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
