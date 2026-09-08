@@ -1,4 +1,4 @@
-name: fixxe mir Smokin' Guns for RK3326 (PortMaster)
+name: Blfixxxe mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          # IMPORTANT: Use libsdl2-dev instead of libsdl1.2-dev for SDL2 support
+          # Use libsdl2-dev for SDL2 support (KMSDRM)
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
             libsdl2-dev libsdl2-image-dev \
@@ -94,6 +94,7 @@ jobs:
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             USE_SDL2=1 BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
+            SDL_CFLAGS="-I/usr/include/SDL2" SDL_LIBS="-lSDL2" \
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
