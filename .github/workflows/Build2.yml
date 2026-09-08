@@ -1,4 +1,4 @@
-name: erstelle Smokin' Guns for RK3326 (PortMaster)
+name: Bauenbsie Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -68,7 +68,11 @@ jobs:
           echo "==> Direct Patching of q_platform.h for ARM64 architecture support..."
           find code/ -name "q_platform.h" -exec sed -i 's/#error "Architecture not supported"/#elif defined(__aarch64__) || defined(__arm64__)\n#define ARCH_STRING "arm64"\n#ifndef Q3_LITTLE_ENDIAN\n#define Q3_LITTLE_ENDIAN\n#endif\n#else\n#error "Architecture not supported"/' {} +
 
-          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 CFLAGS="$OPTIMIZE"
+          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
+            BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
+            USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
+            USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
+            CFLAGS="$OPTIMIZE -I/usr/include/SDL2"
           
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
           if [ -z "$BUILD_OUT" ]; then echo "ERROR: could not locate SmokinGuns build output directory" >&2; find /work/src/SmokinGuns/build -maxdepth 1 -type d >&2 || true; exit 1; fi
