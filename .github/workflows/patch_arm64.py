@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Patch Smokin' Guns for ARM64 (aarch64) cross-compilation.
-Run this script from the SmokinGuns root directory.
+Patch Smokin' Guns for ARM64 (aarch64) cross-compilation with the correct build flags.
+Run this script from the SmokinGuns source root.
 """
 
 import os
@@ -16,21 +16,19 @@ def patch_makefile():
     with open(makefile, "r") as f:
         content = f.read()
 
-    # Force architecture defines and renderer selections. 
-    # Keep SDL 1.2 include path (/usr/include/SDL) - do NOT use SDL2 includes!
+    # 1. Force -fcommon (fixes GCC 10+ linker errors).
+    # 2. Disable renderergl2 (the correct variable is BUILD_RENDERER_REND2).
+    # 3. Correct include path for SDL1.2-compat headers.
     patch = """
-override CFLAGS += -I/usr/include/SDL -DARCH_STRING=\\"aarch64\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1
-override BUILD_RENDERER_OPENGL1=1
-override BUILD_RENDERER_OPENGL2=0
-Q3LCC_CFLAGS += -DARCH_STRING=\\"aarch64\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1
-override ARCH_STRING = aarch64
+override CFLAGS += -fcommon -I/usr/include/SDL
+override BUILD_RENDERER_REND2=0
 """
 
     content = patch + content
     with open(makefile, "w") as f:
         f.write(content)
 
-    print("[PATCHED] Makefile (SDL 1.2 includes preserved)")
+    print("[PATCHED] Makefile (Added -fcommon and correct renderer variable)")
 
 def patch_q_platform():
     patched = 0
@@ -42,9 +40,11 @@ def patch_q_platform():
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
+            # Ensure aarch64 is defined.
             if "#ifndef __aarch64__" not in content:
                 content = "#ifndef __aarch64__\n#define __aarch64__ 1\n#endif\n" + content
 
+            # Replace the #error block with a proper #elif for aarch64.
             old = '#else\n#error "Architecture not supported"'
             new = (
                 '#elif defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n'
