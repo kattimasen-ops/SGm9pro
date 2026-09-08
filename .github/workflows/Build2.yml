@@ -1,4 +1,4 @@
-name: Baue mir Smokin' Guns for RK3326 (PortMaster)
+name: Baue Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -38,8 +38,10 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
+          
+          # Updated to use libsdl1.2-dev instead of libsdl2-dev
           apt-get update
-          apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates wget file zip python3 libsdl2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
+          apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates wget file zip python3 libsdl1.2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
           git config --global --add safe.directory '*'
           
           CMAKE_VERSION=3.28.3
@@ -65,18 +67,18 @@ jobs:
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
-          echo "==> Applying global ARM64, SDL2 & Makefile patches..."
+          echo "==> Applying global ARM64, SDL 1.2 & Makefile patches..."
           python3 -c '
           import os
 
-          # 1. Force CFLAGS into Makefile so command-line overrides cannot strip system defines
+          # 1. Force CFLAGS into Makefile for SDL 1.2 so command-line overrides cannot strip system defines
           if os.path.exists("Makefile"):
               with open("Makefile", "r") as f:
                   mcontent = f.read()
-              patch_flags = "\noverride CFLAGS += -I/usr/include/SDL2 -I/usr/include/SDL2/SDL -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
+              patch_flags = "\noverride CFLAGS += -I/usr/include/SDL -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
               with open("Makefile", "w") as f:
                   f.write(patch_flags + mcontent)
-              print("[PATCHED] Added global override CFLAGS to Makefile")
+              print("[PATCHED] Added global override CFLAGS for SDL 1.2 to Makefile")
 
           # 2. Recursively fix all q_platform.h and architecture checks across all source directories
           for root, dirs, files in os.walk("code"):
@@ -175,35 +177,27 @@ jobs:
           PLACEHOLDER_EOF
 
           cat > "$PKG/${PORT_DIR}/smokinguns.gptk" <<'GPTK_EOF'
-          [ANALOG1]
-          UP = W
-          DOWN = S
-          LEFT = A
-          RIGHT = D
-
-          [ANALOG2]
-          UP = mouse_move_up
-          DOWN = mouse_move_down
-          LEFT = mouse_move_left
-          RIGHT = mouse_move_right
-
-          [BUTTONS]
-          A = mouse_left
-          B = mouse_right
-          X = SPACE
-          Y = R
-          L1 = TAB
-          R1 = mouse_middle
-          L2 = Q
-          R2 = E
-          START = ESCAPE
-          SELECT = F1
-          L3 = LEFTSHIFT
-          R3 = C
-          UP = UP
-          DOWN = DOWN
-          LEFT = LEFT
-          RIGHT = RIGHT
+          back = esc
+          start = enter
+          a = space
+          b = leftctrl
+          x = r
+          y = e
+          l1 = mouse_right
+          r1 = mouse_left
+          up = w
+          down = s
+          left = a
+          right = d
+          left_analog_up = w
+          left_analog_down = s
+          left_analog_left = a
+          left_analog_right = d
+          right_analog_up = mouse_movement_up
+          right_analog_down = mouse_movement_down
+          right_analog_left = mouse_movement_left
+          right_analog_right = mouse_movement_right
+          deadzone = 4000
           GPTK_EOF
 
           cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
@@ -273,11 +267,26 @@ jobs:
           #!/bin/bash
           # PortMaster launch script for Smokin' Guns (RK3326 / M9 Pro)
 
-          controlfolder="/roms/ports"
-          [ -f "${controlfolder}/portmaster.sh" ] && source "${controlfolder}/portmaster.sh"
+          XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 
-          GAMEDIR="/roms/ports/smokinguns"
+          if [ -d "/opt/system/Tools/PortMaster/" ]; then
+            CONTROL_FOLDER="/opt/system/Tools/PortMaster"
+          elif [ -d "/opt/tools/PortMaster/" ]; then
+            CONTROL_FOLDER="/opt/tools/PortMaster"
+          elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
+            CONTROL_FOLDER="$XDG_DATA_HOME/PortMaster"
+          else
+            CONTROL_FOLDER="/roms/ports/PortMaster"
+          fi
+
+          source "$CONTROL_FOLDER/control.txt"
+          [ -f "${CONTROL_FOLDER}/mod_script.sh" ] && source "${CONTROL_FOLDER}/mod_script.sh"
+          get_controls
+
+          GAMEDIR="/$DIRECTORY/ports/smokinguns"
           cd "$GAMEDIR" || exit 1
+
+          $ESUDO chmod +x "$GAMEDIR/smokinguns.aarch64"
 
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
           export LIBGL_ES=2
@@ -292,14 +301,14 @@ jobs:
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
             +set r_mode -1 \
-            +set r_customwidth 640 \
-            +set r_customheight 480 \
+            +set r_customwidth "$DISPLAY_WIDTH" \
+            +set r_customheight "$DISPLAY_HEIGHT" \
             +set r_fullscreen 1 \
             +set fs_basepath "${GAMEDIR}" \
             +set fs_homepath "${GAMEDIR}" \
             +set fs_game smokinguns
 
-          kill_gptokeyb
+          $ESUDO killall gptokeyb
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
 
@@ -312,5 +321,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SmokinGuns-PortMaster-RK3326
-          path: ${{ env.ZIP_NAME }}
+          path: `${{ env.ZIP_NAME }}`
           if-no-files-found: error
