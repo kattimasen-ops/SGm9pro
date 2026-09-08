@@ -39,8 +39,14 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake git pkg-config ca-certificates file libsdl2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
+          apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates wget file libsdl2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
           git config --global --add safe.directory '*'
+          CMAKE_VERSION=3.28.3
+          wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
+          mkdir -p /opt/cmake
+          tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+          export PATH="/opt/cmake/bin:$PATH"
+          cmake --version
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
