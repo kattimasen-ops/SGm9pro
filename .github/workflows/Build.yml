@@ -1,4 +1,4 @@
-name: create mir Smokin' Guns for RK3326 (PortMaster)
+name: klopp mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -100,7 +100,7 @@ jobs:
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            BUILD_RENDERER_OPENGL1=1 BUILD_RENDERER_OPENGL2=0 \
+            BUILD_RENDERER_REND2=0 \
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
@@ -281,8 +281,8 @@ jobs:
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOINTOVLHACK=1
-          # Uses SDL2 under the hood via libsdl1.2-compat - KMSDRM works!
-          export SDL_VIDEODRIVER=KMSDRM
+          # CORRECTED: Use lowercase "kmsdrm" for SDL_VIDEODRIVER
+          export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
