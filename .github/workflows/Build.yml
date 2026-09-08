@@ -1,4 +1,4 @@
-name: Construct Smokin' Guns for RK3326 (PortMaster)
+name: create mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -47,8 +47,8 @@ jobs:
           # Add jammy repo for libsdl1.2-compat (not in focal)
           echo "deb http://ports.ubuntu.com/ubuntu-ports jammy main universe" >> /etc/apt/sources.list
           apt-get update
-          
-          # Install ONLY libsdl1.2-compat (runtime + dev) – do NOT install libsdl1.2-dev (conflict)
+
+          # Install ALL required dependencies, including libglu1-mesa-dev
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
             libsdl1.2-compat libsdl1.2-compat-dev \
@@ -56,8 +56,8 @@ jobs:
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
             libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
-            libx11-dev libxext-dev libgl1-mesa-dev
-          
+            libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev
+
           git config --global --add safe.directory '*'
 
           CMAKE_VERSION=3.28.3
@@ -95,7 +95,7 @@ jobs:
           echo "==> Running architecture patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Starting make (with SDL 1.2 compat headers)..."
+          echo "==> Starting make (with SDL 1.2 compat headers, GLU added)..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
