@@ -1,4 +1,4 @@
-name: fick mir Smokin' Guns for RK3326 (PortMaster)
+name: fix mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -30,7 +30,9 @@ jobs:
           platforms: arm64
 
       - name: Copy patch script into work directory
-        run: cp "$GITHUB_WORKSPACE/.github/workflows/patch_arm64.py" work/
+        run: |
+          mkdir -p work
+          cp "$GITHUB_WORKSPACE/.github/workflows/patch_arm64.py" work/
 
       - name: Write in-container build script
         run: |
