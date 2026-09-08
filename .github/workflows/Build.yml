@@ -1,4 +1,4 @@
-name: fix mir Smokin' Guns for RK3326 (PortMaster)
+name: fixe mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -54,7 +54,6 @@ jobs:
             libx11-dev libxext-dev libgl1-mesa-dev
           git config --global --add safe.directory '*'
 
-          # CMake for GL4ES
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
@@ -62,7 +61,6 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
           cmake --version
 
-          # Build GL4ES
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -78,7 +76,6 @@ jobs:
           if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced by the gl4es build" >&2; exit 1; fi
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
 
-          # Build Smokin' Guns
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
@@ -102,18 +99,42 @@ jobs:
           cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
+          # Copy any shared libraries from the build
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
 
-          VM_DIR="$(find /work/src/SmokinGuns/build -type d -name vm -print -quit)"
-          if [ -n "$VM_DIR" ]; then
-            ( cd "$(dirname "$VM_DIR")" && zip -r /work/out/game/z_vm.pk3 vm )
-            echo "Packed QVM game logic into z_vm.pk3 (from $VM_DIR)"
+          # Pack the QVM game logic into z_vm.pk3
+          echo "==> Packing QVM files into z_vm.pk3..."
+          # Find all .qvm files under the build directory (this includes qagame, cgame, ui)
+          QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
+          if [ -n "$QVM_FILES" ]; then
+            # Create a temporary directory and copy the .qvm files into it, preserving relative paths
+            rm -rf /tmp/vm_pack
+            mkdir -p /tmp/vm_pack
+            for f in $QVM_FILES; do
+              # Get relative path from BUILD_OUT to the file
+              rel="${f#$BUILD_OUT/}"
+              mkdir -p "/tmp/vm_pack/$(dirname "$rel")"
+              cp "$f" "/tmp/vm_pack/$rel"
+              echo "  Added: $rel"
+            done
+            # Zip the entire temporary directory into z_vm.pk3
+            ( cd /tmp/vm_pack && zip -r /work/out/game/z_vm.pk3 . )
+            echo "z_vm.pk3 created."
           else
-            echo "ERROR: no vm/ directory found - z_vm.pk3 was NOT created!" >&2
-            exit 1
+            # Fallback: try to find a vm directory and zip it
+            echo "No .qvm files found, checking for vm directory..."
+            VM_DIR="$(find "$BUILD_OUT" -type d -name vm -print -quit)"
+            if [ -n "$VM_DIR" ]; then
+              ( cd "$(dirname "$VM_DIR")" && zip -r /work/out/game/z_vm.pk3 "$(basename "$VM_DIR")" )
+              echo "z_vm.pk3 created from vm directory."
+            else
+              echo "ERROR: No QVM files or vm directory found!" >&2
+              exit 1
+            fi
           fi
 
           file /work/out/game/smokinguns.aarch64
+          file /work/out/game/z_vm.pk3
           file /work/out/libs.aarch64/libGL.so.1
           echo "Build finished successfully."
           BUILD_SCRIPT_EOF
