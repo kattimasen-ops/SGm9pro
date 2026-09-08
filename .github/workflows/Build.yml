@@ -61,6 +61,22 @@ jobs:
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
+          for QP in $(grep -rl '#error "Architecture not supported"' code 2>/dev/null || true); do
+            if grep -q '__aarch64__' "$QP"; then continue; fi
+            ERR_LINE="$(grep -n '#error "Architecture not supported"' "$QP" | head -1 | cut -d: -f1)"
+            ELSE_LINE="$(head -n "$ERR_LINE" "$QP" | grep -n '#else' | tail -1 | cut -d: -f1)"
+            if [ -z "$ERR_LINE" ] || [ -z "$ELSE_LINE" ]; then
+              echo "WARNING: could not safely locate an insertion point in $QP for aarch64, leaving it untouched" >&2
+              continue
+            fi
+            sed -i "${ELSE_LINE}i\\
+            #elif defined(__linux__) && defined(__aarch64__)\\
+            #define ARCH_STRING \"arm64\"\\
+            #ifndef Q3_LITTLE_ENDIAN\\
+            #define Q3_LITTLE_ENDIAN\\
+            #endif" "$QP"
+            echo "Patched $QP with an aarch64 architecture branch."
+          done
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc BUILD_STANDALONE=1 BUILD_SERVER=0 USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 CFLAGS="$OPTIMIZE"
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
           if [ -z "$BUILD_OUT" ]; then echo "ERROR: could not locate SmokinGuns build output directory" >&2; find /work/src/SmokinGuns/build -maxdepth 1 -type d >&2 || true; exit 1; fi
