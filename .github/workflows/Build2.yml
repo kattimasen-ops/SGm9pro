@@ -39,11 +39,11 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          # Added libfreetype6-dev and corrected SDL to libsdl1.2-dev
+          # Added libfreetype6-dev and xxd, corrected SDL to libsdl1.2-dev
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 \
             libsdl1.2-dev libfreetype6-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev \
-            libdrm-dev libx11-dev libxext-dev
+            libdrm-dev libx11-dev libxext-dev xxd
           git config --global --add safe.directory '*'
           
           CMAKE_VERSION=3.28.3
@@ -123,6 +123,7 @@ jobs:
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
+            BUILD_RENDERERGL2=0 BUILD_RENDERERGL1=1 \
             OPTIMIZE="$OPTIMIZE"
           
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
