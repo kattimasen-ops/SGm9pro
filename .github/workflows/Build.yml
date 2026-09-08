@@ -1,4 +1,4 @@
-name: klopp mir Smokin' Guns for RK3326 (PortMaster)
+name: mach mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -44,20 +44,15 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          # Add jammy repo for libsdl1.2-compat (not in focal)
-          echo "deb http://ports.ubuntu.com/ubuntu-ports jammy main universe" >> /etc/apt/sources.list
-          apt-get update
-
-          # Install ALL required dependencies, including libglu1-mesa-dev
+          # Install all required dependencies from focal (NO jammy repo!)
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
-            libsdl1.2-compat libsdl1.2-compat-dev \
+            libsdl1.2-dev libsdl2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
             libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
             libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev
-
           git config --global --add safe.directory '*'
 
           CMAKE_VERSION=3.28.3
@@ -67,6 +62,7 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
           cmake --version
 
+          # --- Build GL4ES ---
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -85,9 +81,24 @@ jobs:
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
           cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
 
-          # Copy libsdl1.2-compat runtime library
-          cp /usr/lib/aarch64-linux-gnu/libSDL-1.2.so.0 /work/out/libs.aarch64/libSDL-1.2.so.0
+          # --- Build libsdl1.2-compat from source (compatible with glibc 2.31) ---
+          cd /work/src
+          if [ ! -d sdl12-compat ]; then
+            git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
+          fi
+          cd sdl12-compat
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
+            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so
+          make -j"$(nproc)"
+          # The library is built as libSDL-1.2.so.0 in the build directory
+          SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
+          if [ -z "$SDL12_COMPAT_LIB" ]; then echo "ERROR: libSDL-1.2.so.0 was not produced" >&2; exit 1; fi
+          cp "$SDL12_COMPAT_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
+          # --- Build Smokin' Guns ---
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
@@ -95,7 +106,7 @@ jobs:
           echo "==> Running architecture patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Starting make (with SDL 1.2 compat headers, GLU added)..."
+          echo "==> Starting make (with SDL1.2 headers, linking against SDL1.2-compat)..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
@@ -259,7 +270,7 @@ jobs:
           - Rendering goes through GL4ES (GBM/EGL backend, no X11) to
             translate the engine's desktop OpenGL calls into the Mali-G31's
             native OpenGL ES 2.0.
-          - Audio/Video uses libsdl1.2-compat, which translates SDL 1.2 calls to SDL 2 (KMSDRM) for RK3326.
+          - Audio/Video uses libsdl1.2-compat (built from source), which translates SDL 1.2 calls to SDL 2 (KMSDRM) for RK3326.
           - com_hunkMegs is capped at 256 in the launch script to keep the
             Linux OOM killer from terminating the game on this 1GB-RAM
             device.
@@ -281,7 +292,6 @@ jobs:
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOINTOVLHACK=1
-          # CORRECTED: Use lowercase "kmsdrm" for SDL_VIDEODRIVER
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
 
