@@ -1,4 +1,4 @@
-name: Build Smokin' Guns for RK3326 (PortMaster)
+name: Bastel Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates wget file libsdl2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
+          apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates wget file zip libsdl2-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev libx11-dev libxext-dev
           git config --global --add safe.directory '*'
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
@@ -77,7 +77,7 @@ jobs:
             #endif" "$QP"
             echo "Patched $QP with an aarch64 architecture branch."
           done
-          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc BUILD_STANDALONE=1 BUILD_SERVER=0 USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 CFLAGS="$OPTIMIZE"
+          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 CFLAGS="$OPTIMIZE"
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
           if [ -z "$BUILD_OUT" ]; then echo "ERROR: could not locate SmokinGuns build output directory" >&2; find /work/src/SmokinGuns/build -maxdepth 1 -type d >&2 || true; exit 1; fi
           CLIENT_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)"
@@ -85,6 +85,13 @@ jobs:
           cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
+          VM_DIR="$(find /work/src/SmokinGuns/build -type d -name vm -print -quit)"
+          if [ -n "$VM_DIR" ]; then
+            ( cd "$(dirname "$VM_DIR")" && zip -r /work/out/game/z_vm.pk3 vm )
+            echo "Packed QVM game logic into z_vm.pk3 (from $VM_DIR)"
+          else
+            echo "WARNING: no vm/ directory found - z_vm.pk3 was NOT created, the game will have no logic!" >&2
+          fi
           file /work/out/game/smokinguns.aarch64
           file /work/out/libs.aarch64/libGL.so.1
           echo "Build finished successfully."
@@ -106,6 +113,9 @@ jobs:
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
           find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; || true
+          if [ -f work/out/game/z_vm.pk3 ]; then
+            cp work/out/game/z_vm.pk3 "$PKG/${PORT_DIR}/${PORT_DIR}/z_vm.pk3"
+          fi
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
 
           cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" <<'PLACEHOLDER_EOF'
@@ -173,9 +183,9 @@ jobs:
           cat > "$PKG/${PORT_DIR}/README.md" <<'README_EOF'
           # Smokin' Guns - PortMaster (RK3326 / M9 Pro)
 
-          This port ships the compiled aarch64 engine binary and the GL4ES
-          translation layer only. Copyrighted game data is NOT included and
-          must be supplied by you.
+          This port ships the compiled aarch64 engine binary, the QVM game
+          logic (z_vm.pk3), and the GL4ES translation layer. Copyrighted game
+          data is NOT included and must be supplied by you.
 
           ## Required files
 
@@ -193,6 +203,7 @@ jobs:
               |-- libs.aarch64/
               |   `-- libGL.so.1
               `-- smokinguns/
+                  |-- z_vm.pk3
                   `-- sg_pak0.pk3
 
           ## Technical notes
