@@ -1,4 +1,4 @@
-name: mach mir Smokin' Guns for RK3326 (PortMaster)
+name: Baue mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -89,9 +89,11 @@ jobs:
           cd sdl12-compat
           mkdir -p build
           cd build
+          # Patch CFLAGS to define missing SDL2 hints for older SDL2 versions
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
-            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so
+            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
+            -DCMAKE_C_FLAGS="-DSDL_HINT_VIDEODRIVER=\\\"SDL_VIDEODRIVER\\\" -DSDL_HINT_AUDIODRIVER=\\\"SDL_AUDIODRIVER\\\""
           make -j"$(nproc)"
           # The library is built as libSDL-1.2.so.0 in the build directory
           SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
@@ -288,14 +290,23 @@ jobs:
           GAMEDIR="/roms/ports/smokinguns"
           cd "$GAMEDIR" || exit 1
 
+          # Check if GPTOKEYB is set; if not, try to find it or skip
+          if [ -z "$GPTOKEYB" ]; then
+              GPTOKEYB="$(command -v gptokeyb 2>/dev/null || true)"
+          fi
+          if [ -n "$GPTOKEYB" ]; then
+              "$GPTOKEYB" "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
+              GPTOKEYB_PID=$!
+          else
+              echo "GPTOKEYB not found - gamepad controls disabled."
+          fi
+
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOINTOVLHACK=1
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
-
-          $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
@@ -308,7 +319,9 @@ jobs:
             +set fs_homepath "${GAMEDIR}" \
             +set fs_game smokinguns
 
-          kill_gptokeyb
+          if [ -n "$GPTOKEYB_PID" ]; then
+              kill "$GPTOKEYB_PID" 2>/dev/null
+          fi
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
 
