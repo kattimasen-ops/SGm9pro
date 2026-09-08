@@ -44,15 +44,20 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
           apt-get update
-          # Install SDL1.2 headers and the SDL1.2-compat layer (provides SDL 1.2 API on top of SDL2 for KMSDRM)
+          # Add jammy repo to get libsdl1.2-compat packages (not available in focal)
+          echo "deb http://ports.ubuntu.com/ubuntu-ports jammy main universe" >> /etc/apt/sources.list
+          apt-get update
+          
+          # Install dependencies, including libsdl1.2-compat
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
-            libsdl1.2-dev libsdl1.2-compat \
+            libsdl1.2-dev libsdl1.2-compat libsdl1.2-compat-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
             libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
             libx11-dev libxext-dev libgl1-mesa-dev
+          
           git config --global --add safe.directory '*'
 
           CMAKE_VERSION=3.28.3
@@ -80,7 +85,7 @@ jobs:
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
           cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
 
-          # Copy libsdl1.2-compat runtime library (provides SDL1.2 API on SDL2/KMSDRM)
+          # Copy libsdl1.2-compat runtime library
           cp /usr/lib/aarch64-linux-gnu/libSDL-1.2.so.0 /work/out/libs.aarch64/libSDL-1.2.so.0
 
           cd /work/src
