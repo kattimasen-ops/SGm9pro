@@ -1,4 +1,4 @@
-name: still mir Smokin' Guns for RK3326 (PortMaster)
+name: kack mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -76,86 +76,40 @@ jobs:
           cd SmokinGuns
 
           echo "==> Applying comprehensive ARM64 patches..."
-          python3 -c '
+          # Write Python patch script to a file to avoid quoting issues
+          cat > /tmp/patch_arm64.py <<'PYTHON_EOF'
           import os
 
-          # 1. Force CFLAGS and renderer settings into Makefile
+          # Patch Makefile
           if os.path.exists("Makefile"):
               with open("Makefile", "r") as f:
                   mcontent = f.read()
+              # Add global flags
               patch_flags = "\noverride CFLAGS += -I/usr/include/SDL -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
               patch_flags += "\noverride BUILD_RENDERER_OPENGL1=1\noverride BUILD_RENDERER_OPENGL2=0\n"
-              # Also force defines for q3lcc (QVM compiler) – this is crucial
+              # Add defines for q3lcc (QVM compiler)
               patch_flags += "\nQ3LCC_CFLAGS += -DARCH_STRING=\\\"aarch64\\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1\n"
               with open("Makefile", "w") as f:
                   f.write(patch_flags + mcontent)
               print("[PATCHED] Added global override CFLAGS, renderer and Q3LCC flags to Makefile")
 
-          # 2. Patch q_platform.h: force __aarch64__ and provide fallback definitions
+          # Patch q_platform.h: force __aarch64__ and provide fallback definitions
           for root, dirs, files in os.walk("code"):
               for file in files:
                   if file == "q_platform.h":
                       filepath = os.path.join(root, file)
                       with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                           content = f.read()
-                      # Force __aarch64__ at the top of the file (after include guard)
-                      # We assume the include guard is the first non-comment line; we insert after it.
-                      # Simple approach: prepend a define if not already present.
+                      # Insert forced __aarch64__ define at the top if not already present
                       if "#ifndef __aarch64__" not in content:
-                          # Insert after the first #ifndef ... #define ... #endif block (the include guard)
-                          lines = content.split("\n")
-                          for i, line in enumerate(lines):
-                              if line.startswith("#define") and "guard" in line:
-                                  # We can't reliably know guard name; instead, add at very beginning after any leading comments
-                                  pass
-                          # Simpler: add at the very top after initial comments (but before any code)
-                          # We'll just prepend to the file, but ensure it doesn't break include guards.
-                          # Since q_platform.h has an include guard, we can add the define inside the guard.
-                          # Find first occurrence of "#ifndef" and insert after it.
-                          # This is fragile. Better: we can add a fallback at the end of the architecture check.
-                          # Let's instead modify the #elif block to be independent of __aarch64__.
-                          # Actually, we can define __aarch64__ as a macro if not defined, right after the include guard line.
-                          # We'll find the line containing "#define Q3_PLATFORM_H" or similar? Could be generic.
-                          # To avoid complexity, we'll add a fallback at the very beginning of the file:
-                          # #ifndef __aarch64__\n#define __aarch64__ 1\n#endif
-                          # This will be before the include guard? That might cause issues if the include guard is not yet defined.
-                          # Better to add it inside the include guard. So we need to find the end of the include guard opening.
-                          # The structure usually is:
-                          # #ifndef SOMETHING
-                          # #define SOMETHING
-                          # ... content ...
-                          # #endif
-                          # We can insert after the #define SOMETHING line.
-                          # Since we don't know the macro name, we can just add the define right after the first "#define " line that follows the first "#ifndef".
-                          # Let's implement a simple logic:
-                          if "#ifndef __aarch64__" not in content:
-                              # insert after the first line that starts with "#define" and appears after the first "#ifndef"
-                              lines = content.split("\n")
-                              new_lines = []
-                              inserted = False
-                              for line in lines:
-                                  new_lines.append(line)
-                                  if not inserted and line.startswith("#define") and len(lines.index(line)) > 0:
-                                      # Check if we are inside the include guard (after the first #ifndef)
-                                      # Actually, we can just insert after every "#define" line that is part of the guard? Risky.
-                                      pass
-                              # Simpler: insert at a known location: after the line "/*" we can't.
-                              # For robustness, we'll just replace the "#error \"Architecture not supported\"" block with a fallback that always works.
-                              # We'll keep our previous block but also add a forced define of __aarch64__ before the architecture check.
-                              # So we'll insert "#define __aarch64__ 1" at the top of the file (before include guard) – but that is okay because the guard only protects the content after it.
-                              # Actually, putting #define outside the guard is fine; it may get defined multiple times but that's okay.
-                              content = "#ifndef __aarch64__\n#define __aarch64__ 1\n#endif\n" + content
-                              # Now, ensure the #elif block for aarch64 matches (it will, because __aarch64__ is defined)
-                              # Also, the existing #error will not be reached.
-                              with open(filepath, "w", encoding="utf-8") as f:
-                                  f.write(content)
-                              print(f"[PATCHED] Forced __aarch64__ in {filepath}")
-
-          # 3. Remove any ARCH_STRING injections we previously added to .c/.h files (since q_platform.h now defines it)
-          # This step is not needed if we didn't add them, but we might have from earlier runs.
-          # We'll skip removal; it's harmless warnings only.
-
-          '
+                          content = "#ifndef __aarch64__\n#define __aarch64__ 1\n#endif\n" + content
+                      # Also ensure Q3_LITTLE_ENDIAN is defined if not already
+                      # (the existing #elif block will handle it if __aarch64__ is defined)
+                      with open(filepath, "w", encoding="utf-8") as f:
+                          f.write(content)
+                      print(f"[PATCHED] Forced __aarch64__ in {filepath}")
+          PYTHON_EOF
+          python3 /tmp/patch_arm64.py
 
           # Now run make with correct variables
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
