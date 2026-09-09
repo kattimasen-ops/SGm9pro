@@ -1,4 +1,4 @@
-name: milo mir Smokin' Guns for RK3326 (PortMaster)
+name: baby mir Smokin' Guns for RK3326 (PortMaster) - Performance Optimized
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Optimized.zip
   PORT_DIR: smokinguns
 
 jobs:
@@ -42,9 +42,11 @@ jobs:
           set -euo pipefail
           set -x
           export DEBIAN_FRONTEND=noninteractive
-          export OPTIMIZE="-O2 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math"
+          # --- PERFORMANCE UPGRADE: -O3, vectorization, and interposition bypass ---
+          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition"
+          
           apt-get update
-          # Install all required dependencies from focal (NO jammy repo!)
+          # Install all required dependencies from focal
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
             libsdl1.2-dev libsdl2-dev \
@@ -63,7 +65,7 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
           cmake --version
 
-          # --- Build GL4ES ---
+          # --- Build GL4ES (Optimized with -DNOERROR=ON) ---
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -72,7 +74,7 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="$OPTIMIZE" \
             -DNOX11=ON -DGLX_STUBS=ON -DEGL_WRAPPER=ON -DGBM=ON \
-            -DSTATICLIB=OFF -DDEFAULT_ES=2
+            -DSTATICLIB=OFF -DDEFAULT_ES=2 -DNOERROR=ON
           make -j"$(nproc)"
           cd /work/src
           GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
@@ -82,7 +84,7 @@ jobs:
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
           cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
 
-          # --- Build libsdl1.2-compat from source (compatible with glibc 2.31) ---
+          # --- Build libsdl1.2-compat from source ---
           cd /work/src
           if [ ! -d sdl12-compat ]; then
             git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
@@ -90,11 +92,10 @@ jobs:
           cd sdl12-compat
           mkdir -p build
           cd build
-          # Define missing SDL2 hints for older SDL2 versions
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
-            -DCMAKE_C_FLAGS="-DSDL_HINT_VIDEODRIVER=\\\"SDL_VIDEODRIVER\\\" -DSDL_HINT_AUDIODRIVER=\\\"SDL_AUDIODRIVER\\\""
+            -DCMAKE_C_FLAGS="$OPTIMIZE -DSDL_HINT_VIDEODRIVER=\\\"SDL_VIDEODRIVER\\\" -DSDL_HINT_AUDIODRIVER=\\\"SDL_AUDIODRIVER\\\""
           make -j"$(nproc)"
           SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
           if [ -z "$SDL12_COMPAT_LIB" ]; then echo "ERROR: libSDL-1.2.so.0 was not produced" >&2; exit 1; fi
@@ -108,7 +109,7 @@ jobs:
           echo "==> Running architecture patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Starting make (with SDL1.2 headers, linking against SDL1.2-compat)..."
+          echo "==> Starting make with maximum compiler optimizations..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
@@ -125,7 +126,7 @@ jobs:
           chmod +x /work/out/game/smokinguns.aarch64
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
 
-          # Pack QVM game logic into z_vm.pk3 with correct vm/ directory structure
+          # Pack QVM game logic into z_vm.pk3
           echo "==> Packing QVM files into z_vm.pk3..."
           QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
           if [ -n "$QVM_FILES" ]; then
@@ -133,20 +134,13 @@ jobs:
             mkdir -p /tmp/vm_pack/vm
             for f in $QVM_FILES; do
               cp "$f" "/tmp/vm_pack/vm/$(basename "$f")"
-              echo "  Added: vm/$(basename "$f")"
             done
             ( cd /tmp/vm_pack && zip -r /work/out/game/z_vm.pk3 . )
-            echo "z_vm.pk3 created with correct vm/ structure."
           else
             echo "ERROR: No QVM files found!" >&2
             exit 1
-          fi
+          endif
 
-          file /work/out/game/smokinguns.aarch64
-          file /work/out/game/z_vm.pk3
-          file /work/out/libs.aarch64/libGL.so.1
-          file /work/out/libs.aarch64/libEGL.so.1
-          file /work/out/libs.aarch64/libSDL-1.2.so.0
           echo "Build finished successfully."
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
@@ -179,8 +173,7 @@ jobs:
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
           cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" <<'PLACEHOLDER_EOF'
-          Copy your own legally obtained Smokin' Guns .pk3 data files
-          (e.g. sg_pak0.pk3) into this folder before launching the port.
+          Copy your own legally obtained Smokin' Guns .pk3 data files into this folder.
           PLACEHOLDER_EOF
 
           cat > "$PKG/${PORT_DIR}/smokinguns.gptk" <<'GPTK_EOF'
@@ -219,74 +212,23 @@ jobs:
           {
             "version": 2,
             "name": "Smokin Guns.sh",
-            "items": [
-              "Smokin Guns.sh"
-            ],
+            "items": ["Smokin Guns.sh"],
             "items_opt": [],
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Standalone western-themed FPS built on the ioquake3 engine, using GL4ES to run on OpenGL ES 2.0 hardware.",
-              "genres": [
-                "fps",
-                "shooter"
-              ],
+              "desc": "Performance-optimized standalone western FPS for RK3326.",
+              "genres": ["fps", "shooter"],
               "porter_wallet": "",
-              "image": {
-                "screenshot": ""
-              },
+              "image": {"screenshot": ""},
               "rtr": false
             }
           }
           PORTJSON_EOF
 
-          cat > "$PKG/${PORT_DIR}/README.md" <<'README_EOF'
-          # Smokin' Guns - PortMaster (RK3326 / M9 Pro)
-
-          This port ships the compiled aarch64 engine binary, the QVM game
-          logic (z_vm.pk3), and the GL4ES translation layer. Copyrighted game
-          data is NOT included and must be supplied by you.
-
-          ## Required files
-
-          Copy your own legally obtained sg_pak0.pk3 (and any optional fan
-          packs, such as included_fanpak0.pk3) into:
-
-              smokinguns/smokinguns/
-
-          Final on-device layout:
-
-              smokinguns/
-              |-- smokinguns.aarch64
-              |-- smokinguns.gptk
-              |-- port.json
-              |-- libs.aarch64/
-              |   |-- libGL.so.1
-              |   |-- libEGL.so.1
-              |   `-- libSDL-1.2.so.0
-              `-- smokinguns/
-                  |-- z_vm.pk3
-                  `-- sg_pak0.pk3
-
-          ## Technical notes
-
-          - Rendering goes through GL4ES (GBM/EGL backend, no X11) to
-            translate the engine's desktop OpenGL calls into the Mali-G31's
-            native OpenGL ES 2.0.
-          - Audio/Video uses libsdl1.2-compat (built from source), which translates SDL 1.2 calls to SDL 2 (KMSDRM) for RK3326.
-          - com_hunkMegs is capped at 256 in the launch script to keep the
-            Linux OOM killer from terminating the game on this 1GB-RAM
-            device.
-          - Controls are mapped with gptokeyb using smokinguns.gptk; the
-            left stick moves (WASD), the right stick drives the mouse look.
-          README_EOF
-
-          # Create launch script with offline/online toggle
           cat > "$PKG/Smokin Guns.sh" <<'LAUNCH_EOF'
           #!/bin/bash
-          # PortMaster launch script for Smokin' Guns (RK3326 / M9 Pro)
-
-          PLAY_MODE="online"   # Change to 'offline' for max FPS vs bots
+          PLAY_MODE="online"
 
           controlfolder="/roms/ports"
           [ -f "${controlfolder}/portmaster.sh" ] && source "${controlfolder}/portmaster.sh"
@@ -333,6 +275,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326
+          name: SmokinGuns-PortMaster-RK3326-Optimized
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
