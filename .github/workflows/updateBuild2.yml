@@ -1,0 +1,689 @@
+name: Update Smokin' Guns ARM64 RK3326 - Modern ioquake3
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-smokinguns-modern.yml'
+      - '.github/workflows/patch_modern.py'
+
+permissions:
+  contents: read
+
+env:
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Modern.zip
+  PORT_DIR: smokinguns
+
+  # IMPORTANT:
+  # Pin the engine to a known commit once you have tested it.
+  # "main" is used initially so the workflow follows current ioquake3.
+  IOQ3_REPO: https://github.com/ioquake/ioq3.git
+  IOQ3_REF: main
+
+  SMOKINGUNS_REPO: https://github.com/smokin-guns/SmokinGuns.git
+  SMOKINGUNS_REF: master
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+
+      # ------------------------------------------------------------
+      # Checkout this repository
+      # ------------------------------------------------------------
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            zip \
+            file \
+            git \
+            qemu-user-static
+
+      # ------------------------------------------------------------
+      # ARM64 build environment
+      #
+      # We deliberately continue using an ARM64 Ubuntu container.
+      # This is one of the important differences from a generic
+      # desktop ioquake3 build.
+      # ------------------------------------------------------------
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Prepare build directory
+        run: |
+          rm -rf work
+          mkdir -p work/src
+          mkdir -p work/out/game
+          mkdir -p work/out/libs.aarch64
+
+      # ------------------------------------------------------------
+      # Build everything inside ARM64 Ubuntu
+      # ------------------------------------------------------------
+      - name: Build modern engine
+        run: |
+
+          cat > work/build.sh <<'BUILD_SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          set -x
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          # ========================================================
+          # RK3326 / Cortex-A35 optimization
+          #
+          # Keep the same CPU target as the known-working build.
+          # ========================================================
+
+          export OPTIMIZE="
+            -O3
+            -march=armv8-a
+            -mcpu=cortex-a35
+            -mtune=cortex-a35
+            -pipe
+            -fomit-frame-pointer
+            -ffast-math
+            -ftree-vectorize
+            -fno-semantic-interposition
+            -DNDEBUG
+          "
+
+          # ========================================================
+          # Dependencies
+          # ========================================================
+
+          apt-get update
+
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            git \
+            pkg-config \
+            ca-certificates \
+            wget \
+            file \
+            zip \
+            python3 \
+            xxd \
+            libsdl2-dev \
+            libfreetype6-dev \
+            libjpeg-dev \
+            libpng-dev \
+            zlib1g-dev \
+            libogg-dev \
+            libvorbis-dev \
+            libopus-dev \
+            libopusfile-dev \
+            libopenal-dev \
+            libspeex-dev \
+            libcurl4-openssl-dev \
+            libgbm-dev \
+            libegl1-mesa-dev \
+            libgles2-mesa-dev \
+            libdrm-dev \
+            libx11-dev \
+            libxext-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev
+
+          git config --global --add safe.directory '*'
+
+          # ========================================================
+          # CMake
+          # ========================================================
+
+          CMAKE_VERSION=3.28.3
+
+          wget -q \
+            "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" \
+            -O /tmp/cmake.tar.gz
+
+          rm -rf /opt/cmake
+          mkdir -p /opt/cmake
+
+          tar -xzf /tmp/cmake.tar.gz \
+            -C /opt/cmake \
+            --strip-components=1
+
+          export PATH="/opt/cmake/bin:$PATH"
+
+          cmake --version
+
+          # ========================================================
+          # GL4ES
+          #
+          # This is intentionally retained from the working
+          # RK3326 build.
+          # ========================================================
+
+          cd /work/src
+
+          git clone \
+            --depth=1 \
+            https://github.com/ptitSeb/gl4es.git
+
+          cd gl4es
+
+          rm -rf build
+          mkdir build
+          cd build
+
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$OPTIMIZE" \
+            -DNOX11=ON \
+            -DGLX_STUBS=ON \
+            -DEGL_WRAPPER=ON \
+            -DGBM=ON \
+            -DSTATICLIB=OFF \
+            -DDEFAULT_ES=2 \
+            -DNOERROR=ON
+
+          cmake --build . --parallel "$(nproc)"
+
+          GL4ES_LIB="$(find /work/src/gl4es \
+            -name 'libGL.so.1' \
+            -print -quit)"
+
+          EGL_LIB="$(find /work/src/gl4es \
+            -name 'libEGL.so.1' \
+            -print -quit)"
+
+          test -n "$GL4ES_LIB"
+          test -n "$EGL_LIB"
+
+          cp "$GL4ES_LIB" \
+            /work/out/libs.aarch64/libGL.so.1
+
+          cp "$EGL_LIB" \
+            /work/out/libs.aarch64/libEGL.so.1
+
+          # ========================================================
+          # SDL 1.2 compatibility layer
+          #
+          # We retain this because your current Smokin' Guns build
+          # uses the SDL 1.2 ABI.
+          #
+          # The modern engine is built against SDL2, so this library
+          # remains primarily for compatibility with legacy pieces.
+          # ========================================================
+
+          cd /work/src
+
+          git clone \
+            --depth=1 \
+            https://github.com/libsdl-org/sdl12-compat.git
+
+          cd sdl12-compat
+
+          mkdir build
+          cd build
+
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
+            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
+            -DCMAKE_C_FLAGS="$OPTIMIZE"
+
+          cmake --build . --parallel "$(nproc)"
+
+          SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat \
+            -name 'libSDL-1.2.so.0' \
+            -print -quit)"
+
+          test -n "$SDL12_COMPAT_LIB"
+
+          cp "$SDL12_COMPAT_LIB" \
+            /work/out/libs.aarch64/libSDL-1.2.so.0
+
+          # ========================================================
+          # Obtain Smokin' Guns source
+          # ========================================================
+
+          cd /work/src
+
+          git clone \
+            --depth=1 \
+            --branch "$SMOKINGUNS_REF" \
+            "$SMOKINGUNS_REPO" \
+            SmokinGuns
+
+          # ========================================================
+          # Obtain CURRENT ioquake3
+          # ========================================================
+
+          git clone \
+            --depth=1 \
+            --branch "$IOQ3_REF" \
+            "$IOQ3_REPO" \
+            ioq3
+
+          cd /work/src/ioq3
+
+          # ========================================================
+          # Record exact source revisions
+          # ========================================================
+
+          IOQ3_COMMIT="$(git rev-parse HEAD)"
+          SG_COMMIT="$(git -C /work/src/SmokinGuns rev-parse HEAD)"
+
+          echo "ioquake3 commit: $IOQ3_COMMIT"
+          echo "Smokin' Guns commit: $SG_COMMIT"
+
+          echo "$IOQ3_COMMIT" \
+            > /work/out/game/IOQ3_COMMIT.txt
+
+          echo "$SG_COMMIT" \
+            > /work/out/game/SMOKINGUNS_COMMIT.txt
+
+          # ========================================================
+          # IMPORTANT
+          #
+          # Do NOT overwrite the complete ioquake3 source tree with
+          # the old Smokin' Guns engine.
+          #
+          # Instead copy ONLY the game modules.
+          #
+          # This is the actual modernization boundary:
+          #
+          #       CURRENT IOQ3 ENGINE
+          #                +
+          #       SMOKIN' GUNS GAME
+          #
+          # ========================================================
+
+          echo "==> Inspecting game source..."
+
+          for d in game cgame ui; do
+            if [ -d "/work/src/SmokinGuns/code/$d" ]; then
+              echo "Found Smokin' Guns code/$d"
+            else
+              echo "WARNING: Smokin' Guns code/$d does not exist"
+            fi
+          done
+
+          # ========================================================
+          # Create a clean game-source overlay.
+          #
+          # We do this separately so a future compatibility patch
+          # can be added without modifying the original repository.
+          # ========================================================
+
+          mkdir -p /work/src/sg-game
+
+          if [ -d /work/src/SmokinGuns/code/game ]; then
+            cp -a \
+              /work/src/SmokinGuns/code/game \
+              /work/src/sg-game/
+          fi
+
+          if [ -d /work/src/SmokinGuns/code/cgame ]; then
+            cp -a \
+              /work/src/SmokinGuns/code/cgame \
+              /work/src/sg-game/
+          fi
+
+          if [ -d /work/src/SmokinGuns/code/ui ]; then
+            cp -a \
+              /work/src/SmokinGuns/code/ui \
+              /work/src/sg-game/
+          fi
+
+          # ========================================================
+          # Verify that QVM source exists.
+          # ========================================================
+
+          test -d /work/src/sg-game/game
+          test -d /work/src/sg-game/cgame
+          test -d /work/src/sg-game/ui
+
+          # ========================================================
+          # Copy Smokin' Guns game source into current ioquake3.
+          #
+          # This is intentionally isolated from the engine.
+          # ========================================================
+
+          rm -rf /work/src/ioq3/code/game
+          rm -rf /work/src/ioq3/code/cgame
+          rm -rf /work/src/ioq3/code/ui
+
+          cp -a \
+            /work/src/sg-game/game \
+            /work/src/ioq3/code/
+
+          cp -a \
+            /work/src/sg-game/cgame \
+            /work/src/ioq3/code/
+
+          cp -a \
+            /work/src/sg-game/ui \
+            /work/src/ioq3/code/
+
+          cd /work/src/ioq3
+
+          # ========================================================
+          # Build MODERN ENGINE + Smokin' Guns QVM
+          #
+          # OpenGL2 is intentionally disabled.
+          #
+          # OpenGL1 + GL4ES is the conservative RK3326 path.
+          # ========================================================
+
+          rm -rf build
+
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="$OPTIMIZE" \
+            -DCMAKE_C_FLAGS_RELEASE="$OPTIMIZE" \
+            -DBUILD_CLIENT=ON \
+            -DBUILD_SERVER=OFF \
+            -DBUILD_GAME_QVMS=ON \
+            -DBUILD_GAME_LIBRARIES=OFF \
+            -DBUILD_STANDALONE=ON \
+            -DBUILD_RENDERER_OPENGL1=ON \
+            -DBUILD_RENDERER_OPENGL2=OFF \
+            -DUSE_RENDERER_DLOPEN=ON \
+            -DUSE_OPENAL=OFF \
+            -DUSE_OPENAL_DLOPEN=OFF \
+            -DUSE_HTTP=OFF \
+            -DUSE_CODEC_VORBIS=OFF \
+            -DUSE_CODEC_OPUS=OFF \
+            -DUSE_MUMBLE=OFF \
+            -DUSE_VOIP=OFF \
+            -DUSE_FREETYPE=ON \
+            -DUSE_INTERNAL_ZLIB=ON
+
+          cmake \
+            --build build \
+            --parallel "$(nproc)" \
+            --verbose
+
+          # ========================================================
+          # Locate executable
+          # ========================================================
+
+          CLIENT_BIN=""
+
+          for candidate in \
+            build/ioquake3 \
+            build/Release/ioquake3 \
+            build/Debug/ioquake3
+          do
+            if [ -x "$candidate" ]; then
+              CLIENT_BIN="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$CLIENT_BIN" ]; then
+            CLIENT_BIN="$(find build \
+              -type f \
+              -executable \
+              -name 'ioquake3*' \
+              -print -quit || true)"
+          fi
+
+          if [ -z "$CLIENT_BIN" ]; then
+            echo "ERROR: Modern ioquake3 client was not produced."
+            find build -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          echo "Modern client: $CLIENT_BIN"
+
+          cp "$CLIENT_BIN" \
+            /work/out/game/smokinguns.aarch64
+
+          chmod +x \
+            /work/out/game/smokinguns.aarch64
+
+          # ========================================================
+          # Locate QVMs
+          # ========================================================
+
+          echo "==> Searching for QVM files..."
+
+          QVM_FILES="$(find build \
+            -type f \
+            -name '*.qvm' \
+            -print)"
+
+          if [ -z "$QVM_FILES" ]; then
+            echo "ERROR: No QVM files were generated."
+            find build -type f | sort
+            exit 1
+          fi
+
+          rm -rf /tmp/vm_pack
+          mkdir -p /tmp/vm_pack/vm
+
+          while IFS= read -r f; do
+            cp "$f" \
+              "/tmp/vm_pack/vm/$(basename "$f")"
+          done <<< "$QVM_FILES"
+
+          (
+            cd /tmp/vm_pack
+            zip -9 -r \
+              /work/out/game/z_vm.pk3 \
+              vm
+          )
+
+          # ========================================================
+          # Basic ELF verification
+          # ========================================================
+
+          file /work/out/game/smokinguns.aarch64
+
+          readelf -h \
+            /work/out/game/smokinguns.aarch64
+
+          # Must be ARM64.
+          file /work/out/game/smokinguns.aarch64 \
+            | grep -E \
+              'ARM aarch64|ARM64|aarch64' \
+            || {
+              echo "ERROR: binary is not ARM64"
+              exit 1
+            }
+
+          # ========================================================
+          # Final artifact checks
+          # ========================================================
+
+          test -x \
+            /work/out/game/smokinguns.aarch64
+
+          test -f \
+            /work/out/game/z_vm.pk3
+
+          test -f \
+            /work/out/libs.aarch64/libGL.so.1
+
+          test -f \
+            /work/out/libs.aarch64/libEGL.so.1
+
+          test -f \
+            /work/out/libs.aarch64/libSDL-1.2.so.0
+
+          echo "======================================"
+          echo "MODERN BUILD SUCCESSFUL"
+          echo "======================================"
+
+          BUILD_SCRIPT
+
+          chmod +x work/build.sh
+
+      # ------------------------------------------------------------
+      # Execute build in ARM64 Ubuntu
+      # ------------------------------------------------------------
+      - name: Build inside ARM64 Ubuntu
+        run: |
+          docker run \
+            --rm \
+            --platform linux/arm64 \
+            -v "${{ github.workspace }}/work:/work" \
+            -w /work \
+            ubuntu:22.04 \
+            bash /work/build.sh
+
+      # ------------------------------------------------------------
+      # Assemble PortMaster package
+      # ------------------------------------------------------------
+      - name: Assemble PortMaster package
+        run: |
+
+          set -euo pipefail
+
+          PKG="$GITHUB_WORKSPACE/package"
+
+          rm -rf "$PKG"
+
+          mkdir -p \
+            "$PKG/${PORT_DIR}/libs.aarch64"
+
+          mkdir -p \
+            "$PKG/${PORT_DIR}/${PORT_DIR}"
+
+          # --------------------------------------------------------
+          # Main binary
+          # --------------------------------------------------------
+
+          cp \
+            work/out/game/smokinguns.aarch64 \
+            "$PKG/${PORT_DIR}/smokinguns.aarch64"
+
+          chmod +x \
+            "$PKG/${PORT_DIR}/smokinguns.aarch64"
+
+          # --------------------------------------------------------
+          # QVM
+          # --------------------------------------------------------
+
+          cp \
+            work/out/game/z_vm.pk3 \
+            "$PKG/${PORT_DIR}/${PORT_DIR}/z_vm.pk3"
+
+          # --------------------------------------------------------
+          # Graphics compatibility libraries
+          # --------------------------------------------------------
+
+          cp \
+            work/out/libs.aarch64/libGL.so.1 \
+            "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
+
+          cp \
+            work/out/libs.aarch64/libEGL.so.1 \
+            "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
+
+          cp \
+            work/out/libs.aarch64/libSDL-1.2.so.0 \
+            "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
+
+          # --------------------------------------------------------
+          # Controller configuration
+          # --------------------------------------------------------
+
+          cat > "$PKG/${PORT_DIR}/smokinguns.gptk" <<'GPTK_EOF'
+          [ANALOG1]
+          UP = W
+          DOWN = S
+          LEFT = A
+          RIGHT = D
+
+          [ANALOG2]
+          UP = mouse_move_up
+          DOWN = mouse_move_down
+          LEFT = mouse_move_left
+          RIGHT = mouse_move_right
+
+          [BUTTONS]
+          A = mouse_left
+          B = mouse_right
+          X = SPACE
+          Y = R
+          L1 = TAB
+          R1 = mouse_middle
+          L2 = Q
+          R2 = E
+          START = ESCAPE
+          SELECT = F1
+          L3 = LEFTSHIFT
+          R3 = C
+          UP = UP
+          DOWN = DOWN
+          LEFT = LEFT
+          RIGHT = RIGHT
+          GPTK_EOF
+
+          # --------------------------------------------------------
+          # PortMaster metadata
+          # --------------------------------------------------------
+
+          cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
+          {
+            "version": 2,
+            "name": "Smokin Guns.sh",
+            "items": ["Smokin Guns.sh"],
+            "items_opt": [],
+            "attr": {
+              "title": "Smokin' Guns",
+              "porter": "community",
+              "desc": "Modern ioquake3 ARM64 port optimized for RK3326.",
+              "genres": ["fps", "shooter"],
+              "porter_wallet": "",
+              "image": {"screenshot": ""},
+              "rtr": false
+            }
+          }
+          PORTJSON_EOF
+
+          # --------------------------------------------------------
+          # Launcher
+          # --------------------------------------------------------
+
+          cat > "$PKG/Smokin Guns.sh" <<'LAUNCH_EOF'
+          #!/bin/bash
+
+          PLAY_MODE="online"
+
+          controlfolder="/roms/ports"
+
+          [ -f "${controlfolder}/portmaster.sh" ] && \
+            source "${controlfolder}/portmaster.sh"
+
+          GAMEDIR="/roms/ports/smokinguns"
+
+          cd "$GAMEDIR" || exit 1
+
+          # --------------------------------------------------------
+          # Libraries supplied by the port
+          # --------------------------------------------------------
+
+          export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
+
+          # --------------------------------------------------------
+          # GL4ES / KMSDRM
+          # --------------------------------------------------------
+
+          export LIBGL_ES=2
+          export LIBGL_GL=1
+          export LIBGL_NOINTOVLHACK=1
+
+          export SDL_VIDEODRIVER=kmsdrm
+          export SDL_AUDIODRIVER=alsa
+
+          # --------------------------------------------------------
+          
