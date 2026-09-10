@@ -1,4 +1,4 @@
-name: baby mir Smokin' Guns for RK3326 (PortMaster) - Performance Optimized
+name: kack mir Smokin' Guns for RK3326 (PortMaster) - Fixed Build
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Optimized.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Fixed.zip
   PORT_DIR: smokinguns
 
 jobs:
@@ -42,11 +42,11 @@ jobs:
           set -euo pipefail
           set -x
           export DEBIAN_FRONTEND=noninteractive
-          # --- PERFORMANCE UPGRADE: -O3, vectorization, and interposition bypass ---
-          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition"
+          
+          # --- MAXIMUM PERFORMANCE FLAGS ---
+          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG"
           
           apt-get update
-          # Install all required dependencies from focal
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 xxd \
             libsdl1.2-dev libsdl2-dev \
@@ -63,9 +63,8 @@ jobs:
           mkdir -p /opt/cmake
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
-          cmake --version
 
-          # --- Build GL4ES (Optimized with -DNOERROR=ON) ---
+          # --- Build GL4ES ---
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -76,11 +75,9 @@ jobs:
             -DNOX11=ON -DGLX_STUBS=ON -DEGL_WRAPPER=ON -DGBM=ON \
             -DSTATICLIB=OFF -DDEFAULT_ES=2 -DNOERROR=ON
           make -j"$(nproc)"
-          cd /work/src
+          
           GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
           EGL_LIB="$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)"
-          if [ -z "$GL4ES_LIB" ]; then echo "ERROR: libGL.so.1 was not produced" >&2; exit 1; fi
-          if [ -z "$EGL_LIB" ]; then echo "ERROR: libEGL.so.1 was not produced" >&2; exit 1; fi
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
           cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
 
@@ -97,8 +94,8 @@ jobs:
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
             -DCMAKE_C_FLAGS="$OPTIMIZE -DSDL_HINT_VIDEODRIVER=\\\"SDL_VIDEODRIVER\\\" -DSDL_HINT_AUDIODRIVER=\\\"SDL_AUDIODRIVER\\\""
           make -j"$(nproc)"
+          
           SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
-          if [ -z "$SDL12_COMPAT_LIB" ]; then echo "ERROR: libSDL-1.2.so.0 was not produced" >&2; exit 1; fi
           cp "$SDL12_COMPAT_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
           # --- Build Smokin' Guns ---
@@ -106,10 +103,13 @@ jobs:
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
-          echo "==> Running architecture patch script..."
+          echo "==> Running patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Starting make with maximum compiler optimizations..."
+          echo "==> Cleaning stale artifacts to prevent renderergl2 glsl conflicts..."
+          make clean || true
+
+          echo "==> Compiling Smokin' Guns binary..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
@@ -118,16 +118,13 @@ jobs:
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          if [ -z "$BUILD_OUT" ]; then echo "ERROR: could not locate build output" >&2; exit 1; fi
-
           CLIENT_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)"
-          if [ -z "$CLIENT_BIN" ]; then echo "ERROR: could not locate client binary" >&2; exit 1; fi
           cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
           find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
 
           # Pack QVM game logic into z_vm.pk3
-          echo "==> Packing QVM files into z_vm.pk3..."
+          echo "==> Packing QVM files..."
           QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
           if [ -n "$QVM_FILES" ]; then
             rm -rf /tmp/vm_pack
@@ -139,17 +136,15 @@ jobs:
           else
             echo "ERROR: No QVM files found!" >&2
             exit 1
-          endif
-
-          echo "Build finished successfully."
+          fi
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
-      - name: Build inside Ubuntu 20.04 aarch64 container (glibc 2.31)
+      - name: Build inside Ubuntu 20.04 aarch64 container
         run: |
           docker run --rm --platform linux/arm64 -v "${{ github.workspace }}/work":/work -w /work ubuntu:20.04 bash /work/build.sh
 
-      - name: Assemble PortMaster package
+      - name: Assemble PortMaster Package
         run: |
           set -euo pipefail
           PKG="$GITHUB_WORKSPACE/package"
@@ -161,20 +156,10 @@ jobs:
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
           find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; || true
 
-          if [ -f work/out/game/z_vm.pk3 ]; then
-            cp work/out/game/z_vm.pk3 "$PKG/${PORT_DIR}/${PORT_DIR}/z_vm.pk3"
-          else
-            echo "ERROR: z_vm.pk3 missing!" >&2
-            exit 1
-          fi
-
+          cp work/out/game/z_vm.pk3 "$PKG/${PORT_DIR}/${PORT_DIR}/z_vm.pk3"
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
-
-          cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" <<'PLACEHOLDER_EOF'
-          Copy your own legally obtained Smokin' Guns .pk3 data files into this folder.
-          PLACEHOLDER_EOF
 
           cat > "$PKG/${PORT_DIR}/smokinguns.gptk" <<'GPTK_EOF'
           [ANALOG1]
@@ -217,7 +202,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Performance-optimized standalone western FPS for RK3326.",
+              "desc": "Max-performance optimized Smokin' Guns port for RK3326.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -275,6 +260,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-Optimized
+          name: SmokinGuns-PortMaster-RK3326-Fixed
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
