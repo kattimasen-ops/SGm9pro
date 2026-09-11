@@ -109,9 +109,9 @@ jobs:
           echo "==> Cleaning stale artifacts to prevent renderergl2 glsl conflicts..."
           make clean || true
 
-          echo "==> Compiling Smokin' Guns binary..."
+          echo "==> Compiling Smokin' Guns binary and native shared libraries..."
           make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
-            BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=0 BUILD_SERVER=0 \
+            BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             BUILD_RENDERER_REND2=0 \
@@ -121,7 +121,7 @@ jobs:
           CLIENT_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)"
           cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
-          find "$BUILD_OUT" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/ \; || true
+          find "$BUILD_OUT" -name '*.so' -exec cp {} /work/out/game/ \; || true
 
           # Pack QVM game logic into z_vm.pk3
           echo "==> Packing QVM files..."
@@ -154,7 +154,8 @@ jobs:
 
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
-          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; || true
+          find work/out/game -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; || true
+          find work/out/game -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \; || true
 
           cp work/out/game/z_vm.pk3 "$PKG/${PORT_DIR}/${PORT_DIR}/z_vm.pk3"
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
