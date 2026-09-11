@@ -31,7 +31,6 @@ def sanitize_slashes(content):
     content = re.sub(r'(?<=:)//+', '//', content)
 
     # Entferne mehrfache Slashes, aber nur wenn sie nicht Teil einer URL sind
-    # Wir ersetzen '///' oder mehr durch '/', aber nicht '://'
     content = re.sub(r'(?<!:)//+', '/', content)
 
     return content
