@@ -12,6 +12,9 @@ def patch_makefile():
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
 
+    # Fix clean/rm commands that lack -f when rend2 files are absent
+    content = content.replace("rm build/", "rm -f build/")
+
     # Prepend flags to suppress warnings entirely during C compilation
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
