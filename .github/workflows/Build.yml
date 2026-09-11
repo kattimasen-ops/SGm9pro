@@ -29,10 +29,102 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Copy patch script into work directory
+      - name: Write patch script into work directory
         run: |
           mkdir -p work
-          cp "$GITHUB_WORKSPACE/.github/workflows/patch_arm64.py" work/
+          cat <<'PY_EOF' > work/patch_arm64.py
+          #!/usr/bin/env python3
+          import os, sys, re
+
+          def patch_makefile():
+              makefile = "Makefile"
+              if not os.path.exists(makefile):
+                  print(f"[ERROR] {makefile} not found!")
+                  sys.exit(1)
+                  
+              with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
+                  lines = f.readlines()
+
+              new_lines = []
+              builddir_matched = False
+
+              for line in lines:
+                  # 1. Strip out strict -Werror and diagnostic flags
+                  line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
+                  line = re.sub(r'-Wmaybe-uninitialized', '', line)
+                  
+                  # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
+                  line = re.sub(r'\brm\s+', 'rm -f ', line)
+
+                  # 3. Safely strip trailing slashes from BUILDDIR with diagnostics
+                  if line.startswith("BUILDDIR") and "=" in line:
+                      builddir_matched = True
+                      parts = line.split('#', 1)
+                      code_part = parts[0].rstrip()
+                      if code_part.endswith('/'):
+                          code_part = code_part.rstrip('/')
+                      line = code_part + (' #' + parts[1] if len(parts) > 1 else '\n')
+
+                  new_lines.append(line)
+
+              if not builddir_matched:
+                  print("[WARNING] BUILDDIR variable was not matched at line start! Inspect Makefile variable naming.")
+              else:
+                  print("[INFO] BUILDDIR successfully matched and normalized.")
+
+              content = "".join(new_lines)
+
+              # 4. Inject safe compiler overrides and disable rend2 renderer at the top
+              patch = """
+          override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
+          override BUILD_RENDERER_REND2=0
+          """
+              content = patch + content
+
+              with open(makefile, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("[PATCHED] Makefile safely patched.")
+
+          def patch_q_platform():
+              patched = 0
+              for root, dirs, files in os.walk("code"):
+                  for file in files:
+                      if file != "q_platform.h":
+                          continue
+                      path = os.path.join(root, file)
+                      with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                          content = f.read()
+                      
+                      aarch64_override = (
+                          "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
+                          "#ifndef ARCH_STRING\n"
+                          "#define ARCH_STRING \"aarch64\"\n"
+                          "#endif\n"
+                          "#ifndef Q3_LITTLE_ENDIAN\n"
+                          "#define Q3_LITTLE_ENDIAN\n"
+                          "#endif\n"
+                          "#endif\n\n"
+                      )
+                      if "ARCH_STRING" not in content:
+                          content = aarch64_override + content
+
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(content)
+                      patched += 1
+                      
+              if patched == 0:
+                  print("[WARNING] No q_platform.h files found!")
+              else:
+                  print(f"[INFO] Patched {patched} q_platform.h files successfully.")
+
+          if __name__ == "__main__":
+              if not os.path.exists("Makefile"):
+                  print("[ERROR] Makefile not present in current working directory.")
+                  sys.exit(1)
+              patch_makefile()
+              patch_q_platform()
+              print("[DONE] All patches applied cleanly.")
+          PY_EOF
 
       - name: Write in-container build script
         run: |
@@ -87,7 +179,7 @@ jobs:
           cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
           cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
 
-          # --- Build libsdl1.2-compat from source ---
+          # --- Build libsdl1.2-compat from source (Tests Disabled) ---
           cd /work/src
           if [ ! -d sdl12-compat ]; then
             git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
@@ -98,7 +190,8 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
-            -DCMAKE_C_FLAGS="$OPTIMIZE -DSDL_HINT_VIDEODRIVER=\\\"SDL_VIDEODRIVER\\\" -DSDL_HINT_AUDIODRIVER=\\\"SDL_AUDIODRIVER\\\""
+            -DCMAKE_C_FLAGS="$OPTIMIZE" \
+            -DSDL12TESTS=OFF
           make -j"$(nproc)"
           
           SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
@@ -272,7 +365,7 @@ jobs:
 
           # --- 3. Stable GL4ES & KMSDRM Environment ---
           export LIBGL_ES=2
-          export LIBGL_GL=21
+          export LIBGL_GL=1
           export LIBGL_NOTEST=1
           export LIBGL_FB=1
           export LIBGL_FBO=0
@@ -298,7 +391,7 @@ jobs:
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
-            +set com_hunkMegs 128 \
+            +set com_hunkMegs 256 \
             +set com_maxfps 60 \
             +set cl_maxpackets 60 \
             +set rate 25000 \
@@ -325,10 +418,10 @@ jobs:
             +set r_ignorehwgamma 1 \
             +set r_ext_compressed_textures 1 \
             +set r_ext_framebuffer 0 \
-            +set r_picmip 0 \
+            +set r_picmip 2 \
             +set r_lodbias 0 \
-            +set r_subdivisions 4 \
-            +set r_detailtextures 1 \
+            +set r_subdivisions 12 \
+            +set r_detailtextures 0 \
             +set r_texturebits 16 \
             +set r_colorbits 16 \
             +set r_dynamiclight 0 \
@@ -337,9 +430,9 @@ jobs:
             +set r_stencilbits 0 \
             +set r_lodCurveError 250 \
             +set cg_shadows 0 \
-            +set cg_gibs 1 \
+            +set cg_gibs 0 \
             +set cg_marks 0 \
-            +set cg_impactparticles 1 \
+            +set cg_impactparticles 0 \
             +set cg_brassTime 0 \
             +set cg_simpleItems 0 \
             +set cg_draw3dIcons 0 \
