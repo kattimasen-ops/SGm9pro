@@ -17,17 +17,20 @@ def patch_makefile():
     # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
     content = re.sub(r'\brm\s+', 'rm -f ', content)
 
-    # 3. Aggressively strip trailing slashes from any directory/path/builddir variable assignment
-    content = re.sub(r'^([A-Z_]*(?:DIR|PATH|BUILDDIR)\s*[:+?]?=\s*)([^#\r\n]+?)/+\s*$', r'\1\2', content, flags=re.MULTILINE)
+    # 3. Forcibly strip trailing slashes from ALL variable assignments (BUILDDIR, UI_DIR, etc.)
+    def clean_var_assignment(match):
+        prefix = match.group(1)  # e.g., "BUILDDIR ="
+        val = match.group(2).rstrip() # value
+        # Strip any trailing slashes from the variable value
+        val = re.sub(r'/+\s*$', '', val)
+        return f"{prefix} {val}"
 
-    # 4. Recursively flatten ANY double slashes in the entire Makefile text until clean
-    while '//' in content:
-        content = content.replace('//', '/')
+    content = re.sub(r'^([A-Z_]+\s*[:+?]?=)\s*(.+?)\s*$', clean_var_assignment, content, flags=re.MULTILINE)
 
-    # 5. Automatically disable sdl12-compat tests in any cmake command to speed up build
+    # 4. Automatically disable sdl12-compat tests in any cmake command to speed up build
     content = re.sub(r'(cmake\s+[^#\r\n]+)', r'\1 -DSDL12TESTS=OFF', content)
 
-    # 6. Inject safe compiler overrides and disable rend2 renderer
+    # 5. Inject safe compiler overrides and disable rend2 renderer
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -36,7 +39,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile fully cleaned: double slashes flattened and variables normalized.")
+    print("[PATCHED] Makefile fully cleaned: all variable trailing slashes stripped.")
 
 def patch_q_platform():
     patched = 0
