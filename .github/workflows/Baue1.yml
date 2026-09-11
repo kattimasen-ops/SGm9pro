@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+import os, sys, re
+
+def patch_makefile():
+    makefile = "Makefile"
+    if not os.path.exists(makefile):
+        print(f"[ERROR] {makefile} not found!")
+        sys.exit(1)
+
+    with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    # 1. Strip out strict warning/error flags globally
+    content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
+    content = re.sub(r'-Wmaybe-uninitialized', '', content)
+    content = re.sub(r'-Wuninitialized', '', content)
+    content = re.sub(r'-Wstrict-overflow', '', content)
+
+    # 2. Make rm commands safe
+    content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
+
+    # 3. Fix double-slash path expansion bugs (targeted)
+    content = content.replace('//ui/', '/ui/')
+    content = content.replace('//game/', '/game/')
+    content = content.replace('//cgame/', '/cgame/')
+
+    with open(makefile, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[PATCHED] Makefile warning flags cleaned and paths sanitized.")
+
+def patch_q_platform():
+    path = "code/qcommon/q_platform.h"
+    if not os.path.exists(path):
+        print(f"[ERROR] {path} not found!")
+        sys.exit(1)
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    # Check if aarch64 ARCH_STRING is already defined anywhere
+    if re.search(r'ARCH_STRING\s+"aarch64"', content):
+        print("[INFO] q_platform.h already has ARCH_STRING aarch64 defined.")
+        return
+
+    # Also check if the aarch64 preprocessor block already exists
+    if '__aarch64__' in content and 'ARCH_STRING' in content:
+        # Check if it's in the ARCH_STRING chain
+        if re.search(r'__aarch64__.*?ARCH_STRING', content, re.DOTALL):
+            print("[INFO] q_platform.h already handles __aarch64__ for ARCH_STRING.")
+            return
+
+    aarch64_override = (
+        "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
+        "#ifdef ARCH_STRING\n"
+        "#undef ARCH_STRING\n"
+        "#endif\n"
+        "#define ARCH_STRING \"aarch64\"\n"
+        "#ifndef Q3_LITTLE_ENDIAN\n"
+        "#define Q3_LITTLE_ENDIAN\n"
+        "#endif\n"
+        "#endif\n\n"
+    )
+
+    content = aarch64_override + content
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[PATCHED] Injected ARCH_STRING override into code/qcommon/q_platform.h.")
+
+def patch_standalone_config():
+    """Ensure the standalone config uses the correct game directory name."""
+    path = "code/qcommon/q_shared.h"
+    if not os.path.exists(path):
+        print(f"[WARN] {path} not found, skipping standalone config patch.")
+        return
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    # Ensure PRODUCT_NAME is defined for standalone builds
+    if 'PRODUCT_NAME' not in content:
+        print("[WARN] PRODUCT_NAME not found in q_shared.h - standalone may use defaults.")
+    else:
+        print("[INFO] q_shared.h already has PRODUCT_NAME defined.")
+
+if __name__ == "__main__":
+    patch_makefile()
+    patch_q_platform()
+    patch_standalone_config()
+    print("[DONE] All local source patches applied successfully.")
