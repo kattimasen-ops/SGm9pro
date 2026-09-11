@@ -8,29 +8,34 @@ def patch_makefile():
         sys.exit(1)
         
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
+        lines = f.readlines()
 
-    # 1. Strip out strict -Werror and diagnostic flags
-    content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
-    content = re.sub(r'-Wmaybe-uninitialized', '', content)
-    
-    # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
-    content = re.sub(r'\brm\s+', 'rm -f ', content)
+    new_lines = []
+    for line in lines:
+        # 1. Strip out strict -Werror and diagnostic flags
+        line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
+        line = re.sub(r'-Wmaybe-uninitialized', '', line)
+        
+        # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
+        line = re.sub(r'\brm\s+', 'rm -f ', line)
 
-    # 3. Forcibly strip trailing slashes from ALL variable assignments (BUILDDIR, UI_DIR, etc.)
-    def clean_var_assignment(match):
-        prefix = match.group(1)  # e.g., "BUILDDIR ="
-        val = match.group(2).rstrip() # value
-        # Strip any trailing slashes from the variable value
-        val = re.sub(r'/+\s*$', '', val)
-        return f"{prefix} {val}"
+        # 3. Safely strip trailing slashes from BUILDDIR without touching conditionals/endif
+        if line.startswith("BUILDDIR") and "=" in line:
+            parts = line.split('#', 1)
+            code_part = parts[0].rstrip()
+            if code_part.endswith('/'):
+                code_part = code_part.rstrip('/')
+            line = code_part + (' #' + parts[1] if len(parts) > 1 else '\n')
 
-    content = re.sub(r'^([A-Z_]+\s*[:+?]?=)\s*(.+?)\s*$', clean_var_assignment, content, flags=re.MULTILINE)
+        # 4. Automatically disable sdl12-compat tests in any cmake command
+        if 'cmake' in line and 'SDL12TESTS' not in line:
+            line = line.rstrip() + ' -DSDL12TESTS=OFF\n'
 
-    # 4. Automatically disable sdl12-compat tests in any cmake command to speed up build
-    content = re.sub(r'(cmake\s+[^#\r\n]+)', r'\1 -DSDL12TESTS=OFF', content)
+        new_lines.append(line)
 
-    # 5. Inject safe compiler overrides and disable rend2 renderer
+    content = "".join(new_lines)
+
+    # 5. Inject safe compiler overrides and disable rend2 renderer at the top
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -39,7 +44,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile fully cleaned: all variable trailing slashes stripped.")
+    print("[PATCHED] Makefile safely patched without breaking conditionals.")
 
 def patch_q_platform():
     patched = 0
