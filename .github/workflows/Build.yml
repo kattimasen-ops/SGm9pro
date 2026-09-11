@@ -1,4 +1,4 @@
-name: Craft Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
+name: Port Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
 
 on:
   workflow_dispatch:
@@ -36,6 +36,11 @@ jobs:
           #!/usr/bin/env python3
           import os, sys, re, shutil
 
+          def sanitize_slashes(content):
+              content = re.sub(r'(?<=:)//+', '//', content)
+              content = re.sub(r'(?<!:)//+', '/', content)
+              return content
+
           def patch_makefile():
               makefile = "Makefile"
               if not os.path.exists(makefile):
@@ -52,9 +57,6 @@ jobs:
                   new_lines.append(line)
               content = "".join(new_lines)
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
-              content = content.replace('//ui/', '/ui/')
-              content = content.replace('//game/', '/game/')
-              content = content.replace('//cgame/', '/cgame/')
               content = content.replace('python ', 'python3 ')
               content = content.replace('python2 ', 'python3 ')
               if not re.search(r'ARCH_STRING\s*=', content):
@@ -66,9 +68,10 @@ jobs:
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
+              content = sanitize_slashes(content)
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: renderergl2 aus TARGETS entfernt, rm -f, python3, O3, fno-plt.")
+              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt, Slashes bereinigt.")
 
           def rename_renderergl2_dir():
               renderergl2_dir = "code/renderergl2"
@@ -128,7 +131,12 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
 
-          export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -DNDEBUG -w"
+          # =====================================================================
+          # MAXIMUM OPTIMIERUNG: Cortex-A35 gezielt, LTO deaktiviert (ARM64-Segfaults),
+          # -fno-plt, -fno-stack-protector, -falign-functions=4, -fmerge-all-constants,
+          # -fno-asynchronous-unwind-tables
+          # =====================================================================
+          export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=4 -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
           apt-get update
@@ -154,7 +162,7 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
 
           # =====================================================================
-          # SCHRITT 1: GL4ES bauen
+          # SCHRITT 1: GL4ES bauen (OpenGL -> OpenGL ES 2.0 Uebersetzung)
           # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
@@ -171,6 +179,7 @@ jobs:
 
           # =====================================================================
           # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
+          # ANSTATT sdl12-compat (KEINE SDL1->SDL2 Uebersetzung!)
           # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
@@ -353,11 +362,21 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
+          # =====================================================================
+          # MAXIMUM PERFORMANCE-TUNING
+          # CPU-Governor auf performance + Frequenz auf 1512 MHz erzwingen
+          # =====================================================================
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
+          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
+          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
 
+          # RAM-Tuning: Swappiness minimieren
           echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
           echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
 
+          # =====================================================================
+          # GL4ES PERFORMANCE-VARIABLEN (MAXIMUM)
+          # =====================================================================
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
@@ -366,6 +385,7 @@ jobs:
           export LIBGL_NOERROR=1
           export LIBGL_FORCE16BITS=1
           export LIBGL_BATCH=100
+          export LIBGL_BEGINEND=2
           export LIBGL_FASTMATH=1
           export LIBGL_NOBANNER=1
           export LIBGL_VSYNC=0
@@ -375,9 +395,13 @@ jobs:
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
+          # =====================================================================
+          # SDL 1.2 NATIVE TREIBER (fbcon, nicht kmsdrm!)
+          # =====================================================================
           export SDL_VIDEODRIVER=fbcon
           export SDL_AUDIODRIVER=alsa
           export SDL_FBDEV=/dev/fb0
+          export SDL_VIDEO_FBCON_NOWINDOW=1
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
