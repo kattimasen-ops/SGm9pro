@@ -131,11 +131,6 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
 
-          # =====================================================================
-          # MAXIMUM OPTIMIERUNG: Cortex-A35 gezielt, LTO deaktiviert (ARM64-Segfaults),
-          # -fno-plt, -fno-stack-protector, -falign-functions=4, -fmerge-all-constants,
-          # -fno-asynchronous-unwind-tables
-          # =====================================================================
           export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=4 -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
@@ -162,7 +157,7 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
 
           # =====================================================================
-          # SCHRITT 1: GL4ES bauen (OpenGL -> OpenGL ES 2.0 Uebersetzung)
+          # SCHRITT 1: GL4ES bauen
           # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
@@ -179,7 +174,6 @@ jobs:
 
           # =====================================================================
           # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
-          # ANSTATT sdl12-compat (KEINE SDL1->SDL2 Uebersetzung!)
           # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
@@ -362,21 +356,13 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          # =====================================================================
-          # MAXIMUM PERFORMANCE-TUNING
-          # CPU-Governor auf performance + Frequenz auf 1512 MHz erzwingen
-          # =====================================================================
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
           echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
           echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
 
-          # RAM-Tuning: Swappiness minimieren
           echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
           echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
 
-          # =====================================================================
-          # GL4ES PERFORMANCE-VARIABLEN (MAXIMUM)
-          # =====================================================================
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
@@ -395,9 +381,6 @@ jobs:
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
-          # =====================================================================
-          # SDL 1.2 NATIVE TREIBER (fbcon, nicht kmsdrm!)
-          # =====================================================================
           export SDL_VIDEODRIVER=fbcon
           export SDL_AUDIODRIVER=alsa
           export SDL_FBDEV=/dev/fb0
