@@ -1,4 +1,4 @@
-name: Levitate Smokin' Guns for RK3326 (PortMaster) - Native SDL 1.2 ARM64 Build
+name:Create Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Native-SDL12.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Native-SDL12-Max.zip
   PORT_DIR: smokinguns
 
 jobs:
@@ -65,9 +65,12 @@ jobs:
               content = content.replace('python2 ', 'python3 ')
               if not re.search(r'ARCH_STRING\s*=', content):
                   content = re.sub(r'(ARCH\s*=\s*[^\n]*\n)', r'\1ARCH_STRING = aarch64\n', content, count=1)
+              content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
+              if '-fno-plt' not in content:
+                  content = re.sub(r'(OPTIMIZE\s*=\s*[^\n]*)', r'\1 -fno-plt', content, count=1)
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3.")
+              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
@@ -115,7 +118,11 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
 
-          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -w"
+          # =====================================================================
+          # OPTIMIERUNG: Cortex-A35 gezielt, LTO deaktiviert (ARM64-Segfaults),
+          # -fno-plt fuer schnellere PLT-Aufrufe, -fno-exceptions/-rtti fuer C++
+          # =====================================================================
+          export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
           apt-get update
@@ -126,7 +133,8 @@ jobs:
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
             libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
-            libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev
+            libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev \
+            autoconf automake libtool
           git config --global --add safe.directory '*'
 
           ccache -M 2G
@@ -158,19 +166,26 @@ jobs:
           # =====================================================================
           # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
           # ANSTATT sdl12-compat (KEINE SDL1->SDL2 Uebersetzung!)
+          # Branch ist "main", nicht "SDL-1.2"
           # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
-            git clone --depth=1 --branch SDL-1.2 https://github.com/libsdl-org/SDL-1.2.git
+            git clone --depth=1 https://github.com/libsdl-org/SDL-1.2.git
           fi
           cd SDL-1.2
 
-          # SDL 1.2 benoetigt autotools fuer den Build
+          # autogen.sh ausfuehren, um configure zu erzeugen
           if [ ! -f configure ]; then
-            ./autogen.sh || true
+            chmod +x autogen.sh 2>/dev/null || true
+            ./autogen.sh || autoreconf -fi || true
           fi
 
-          # ARM64-Optimierungen aktivieren
+          # Falls configure immer noch fehlt, Fehler ausgeben
+          if [ ! -f configure ]; then
+            echo "[ERROR] configure konnte nicht erzeugt werden!"
+            exit 1
+          fi
+
           ./configure \
             --prefix=/usr \
             --disable-video-x11 \
@@ -189,6 +204,8 @@ jobs:
             --disable-diskaudio \
             --disable-pulseaudio \
             --disable-arts \
+            --enable-arm-simd \
+            --enable-arm-neon \
             --enable-shared \
             --disable-static \
             CFLAGS="$OPTIMIZE" \
@@ -196,10 +213,9 @@ jobs:
 
           make -j"$(nproc)"
 
-          # Native libSDL-1.2.so.0 kopieren
           cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          echo "==> Native SDL 1.2 Bibliothek gebaut:"
+          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD/NEON):"
           ls -la /work/out/libs.aarch64/
 
           # =====================================================================
@@ -298,7 +314,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2. No sdl12-compat translation, no QVM, no renderergl2.",
+              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2 (ARM SIMD/NEON). No sdl12-compat, no QVM, no renderergl2. Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -334,8 +350,14 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
+          # Performance-Tuning: CPU-Governor auf performance
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
 
+          # RAM-Tuning: Swappiness minimieren
+          echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
+          echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
+
+          # GL4ES Performance-Variablen (MAXIMUM)
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
@@ -345,7 +367,15 @@ jobs:
           export LIBGL_FORCE16BITS=1
           export LIBGL_BATCH=100
           export LIBGL_FASTMATH=1
+          export LIBGL_NOBANNER=1
+          export LIBGL_VSYNC=0
+          export LIBGL_SILENTSTUB=1
+          export LIBGL_XREFRESH=0
+          export LIBGL_RECYCLEFBO=1
+          export LIBGL_MIPMAP=5
+          export LIBGL_SHRINK=8
 
+          # SDL 1.2 native Treiber (fbcon, nicht kmsdrm!)
           export SDL_VIDEODRIVER=fbcon
           export SDL_AUDIODRIVER=alsa
           export SDL_FBDEV=/dev/fb0
@@ -387,6 +417,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-Native-SDL12
+          name: SmokinGuns-PortMaster-RK3326-Native-SDL12-Max
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
