@@ -1,4 +1,4 @@
-name:Create Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
+name: Create Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
 
 on:
   workflow_dispatch:
