@@ -1,4 +1,4 @@
-name: Create Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
+name: Craft Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
           mkdir -p work
           cat <<'PY_EOF' > work/patch_arm64.py
           #!/usr/bin/env python3
-          import os, sys, re
+          import os, sys, re, shutil
 
           def patch_makefile():
               makefile = "Makefile"
@@ -43,20 +43,14 @@ jobs:
                   sys.exit(1)
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
-              content = re.sub(r'RENDERER_GL2\s*=\s*[^\n]*\n', 'RENDERER_GL2 =\n', content)
               lines = content.splitlines(keepends=True)
               new_lines = []
               for line in lines:
-                  if 'renderergl2' in line and ('BUILD_' in line or 'TARGET' in line or 'RENDERER' in line):
+                  if 'renderer_opengl2' in line or 'renderergl2' in line:
                       new_lines.append('# [PATCHED] Disabled renderergl2: ' + line)
                       continue
                   new_lines.append(line)
               content = "".join(new_lines)
-              content = re.sub(r'^\$\(B\)/renderergl2/[^\n]*\n', '', content, flags=re.MULTILINE)
-              content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
-              content = re.sub(r'-Wmaybe-uninitialized', '', content)
-              content = re.sub(r'-Wuninitialized', '', content)
-              content = re.sub(r'-Wstrict-overflow', '', content)
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
               content = content.replace('//ui/', '/ui/')
               content = content.replace('//game/', '/game/')
@@ -68,9 +62,24 @@ jobs:
               content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
               if '-fno-plt' not in content:
                   content = re.sub(r'(OPTIMIZE\s*=\s*[^\n]*)', r'\1 -fno-plt', content, count=1)
+              content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
+              content = re.sub(r'-Wmaybe-uninitialized', '', content)
+              content = re.sub(r'-Wuninitialized', '', content)
+              content = re.sub(r'-Wstrict-overflow', '', content)
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt.")
+              print("[PATCHED] Makefile: renderergl2 aus TARGETS entfernt, rm -f, python3, O3, fno-plt.")
+
+          def rename_renderergl2_dir():
+              renderergl2_dir = "code/renderergl2"
+              if os.path.isdir(renderergl2_dir):
+                  backup_dir = "code/renderergl2.disabled"
+                  if os.path.isdir(backup_dir):
+                      shutil.rmtree(backup_dir)
+                  os.rename(renderergl2_dir, backup_dir)
+                  print(f"[PATCHED] {renderergl2_dir} -> {backup_dir} umbenannt.")
+              else:
+                  print(f"[INFO] {renderergl2_dir} existiert nicht, kein Umbenennen noetig.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
@@ -105,6 +114,7 @@ jobs:
 
           if __name__ == "__main__":
               patch_makefile()
+              rename_renderergl2_dir()
               patch_q_platform()
               print("[DONE] Alle Patches erfolgreich angewendet.")
           PY_EOF
@@ -118,10 +128,6 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
 
-          # =====================================================================
-          # OPTIMIERUNG: Cortex-A35 gezielt, LTO deaktiviert (ARM64-Segfaults),
-          # -fno-plt fuer schnellere PLT-Aufrufe, -fno-exceptions/-rtti fuer C++
-          # =====================================================================
           export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
@@ -148,7 +154,7 @@ jobs:
           export PATH="/opt/cmake/bin:$PATH"
 
           # =====================================================================
-          # SCHRITT 1: GL4ES bauen (OpenGL -> OpenGL ES 2.0 Uebersetzung)
+          # SCHRITT 1: GL4ES bauen
           # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
@@ -165,8 +171,6 @@ jobs:
 
           # =====================================================================
           # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
-          # ANSTATT sdl12-compat (KEINE SDL1->SDL2 Uebersetzung!)
-          # Branch ist "main", nicht "SDL-1.2"
           # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
@@ -174,13 +178,11 @@ jobs:
           fi
           cd SDL-1.2
 
-          # autogen.sh ausfuehren, um configure zu erzeugen
           if [ ! -f configure ]; then
             chmod +x autogen.sh 2>/dev/null || true
             ./autogen.sh || autoreconf -fi || true
           fi
 
-          # Falls configure immer noch fehlt, Fehler ausgeben
           if [ ! -f configure ]; then
             echo "[ERROR] configure konnte nicht erzeugt werden!"
             exit 1
@@ -234,6 +236,7 @@ jobs:
           echo "==> Smokin' Guns kompilieren (OHNE renderergl2, NUR native Module)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
+            BUILD_RENDERER_OPENGL2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
@@ -350,14 +353,11 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          # Performance-Tuning: CPU-Governor auf performance
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
 
-          # RAM-Tuning: Swappiness minimieren
           echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
           echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
 
-          # GL4ES Performance-Variablen (MAXIMUM)
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
@@ -375,7 +375,6 @@ jobs:
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
-          # SDL 1.2 native Treiber (fbcon, nicht kmsdrm!)
           export SDL_VIDEODRIVER=fbcon
           export SDL_AUDIODRIVER=alsa
           export SDL_FBDEV=/dev/fb0
