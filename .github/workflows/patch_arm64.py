@@ -5,7 +5,7 @@ ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert) - MAXIMUM PERFORMANCE
 - Benennt das renderergl2-Verzeichnis um, falls vorhanden
 - Erzwingt ARCH_STRING "aarch64"
 - Macht rm-Befehle safe
-- Korrigiert Pfad-Expansion
+- Bereinigt doppelte Slashes SICHER (ohne gueltige Pfade zu zerstoeren)
 - Stellt sicher, dass python3 verwendet wird
 - Erzwingt -O3 und -fno-plt
 """
@@ -14,6 +14,27 @@ import os
 import sys
 import re
 import shutil
+
+
+def sanitize_slashes(content):
+    """
+    Entfernt doppelte Slashes sicher, ohne gueltige Pfade zu zerstoeren.
+
+    Die Makefile verwendet Pfade wie '$(B)/code/ui'. Ein Patch, der
+    '//ui/' durch '/ui/' ersetzt, entfernt 'code/' und erzeugt '$(B)//ui'.
+
+    Diese Funktion normalisiert Slash-Sequenzen auf Slash-Ebene, ohne
+    Pfadbestandteile zu entfernen. Sie schuetzt URLs (://) und entfernt
+    nur redundante Slashes.
+    """
+    # Schuetze URLs: :// darf nicht zu :/ werden
+    content = re.sub(r'(?<=:)//+', '//', content)
+
+    # Entferne mehrfache Slashes, aber nur wenn sie nicht Teil einer URL sind
+    # Wir ersetzen '///' oder mehr durch '/', aber nicht '://'
+    content = re.sub(r'(?<!:)//+', '/', content)
+
+    return content
 
 
 def patch_makefile():
@@ -26,10 +47,6 @@ def patch_makefile():
         content = f.read()
 
     # --- FIX 1: renderergl2 aus der TARGETS-Variable entfernen ---
-    # Die Makefile fuegt renderer_opengl2 ueber eine Zeile wie
-    # "TARGETS += $(B)/renderer_opengl2_$(SHLIBNAME)" hinzu.
-    # Wir suchen nach Zeilen, die "renderer_opengl2" enthalten, und
-    # kommentieren sie aus.
     lines = content.splitlines(keepends=True)
     new_lines = []
     for line in lines:
@@ -42,16 +59,11 @@ def patch_makefile():
     # --- FIX 2: rm-Befehle safe machen ---
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
-    # --- FIX 3: Doppelte Slashes korrigieren ---
-    content = content.replace('//ui/', '/ui/')
-    content = content.replace('//game/', '/game/')
-    content = content.replace('//cgame/', '/cgame/')
-
-    # --- FIX 4: python3 erzwingen ---
+    # --- FIX 3: python3 erzwingen ---
     content = content.replace('python ', 'python3 ')
     content = content.replace('python2 ', 'python3 ')
 
-    # --- FIX 5: ARCH_STRING-Konsistenz ---
+    # --- FIX 4: ARCH_STRING-Konsistenz ---
     if not re.search(r'ARCH_STRING\s*=', content):
         content = re.sub(
             r'(ARCH\s*=\s*[^\n]*\n)',
@@ -60,10 +72,10 @@ def patch_makefile():
             count=1
         )
 
-    # --- FIX 6: -O2 durch -O3 ersetzen ---
+    # --- FIX 5: -O2 durch -O3 ersetzen ---
     content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
 
-    # --- FIX 7: -fno-plt hinzufuegen, falls nicht vorhanden ---
+    # --- FIX 6: -fno-plt hinzufuegen ---
     if '-fno-plt' not in content:
         content = re.sub(
             r'(OPTIMIZE\s*=\s*[^\n]*)',
@@ -72,19 +84,22 @@ def patch_makefile():
             count=1
         )
 
-    # --- FIX 8: Strikte Warn-Flags entfernen ---
+    # --- FIX 7: Strikte Warn-Flags entfernen ---
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
     content = re.sub(r'-Wuninitialized', '', content)
     content = re.sub(r'-Wstrict-overflow', '', content)
 
+    # --- FIX 8: Doppelte Slashes SICHER bereinigen ---
+    content = sanitize_slashes(content)
+
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: renderergl2 aus TARGETS entfernt, rm -f, python3, O3, fno-plt.")
+    print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt, Slashes bereinigt.")
 
 
 def rename_renderergl2_dir():
-    """Benennt das renderergl2-Verzeichnis um, falls es existiert, damit der Build es nicht findet."""
+    """Benennt das renderergl2-Verzeichnis um, falls es existiert."""
     renderergl2_dir = "code/renderergl2"
     if os.path.isdir(renderergl2_dir):
         backup_dir = "code/renderergl2.disabled"
