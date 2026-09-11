@@ -1,4 +1,4 @@
-name: kack mir Smokin' Guns for RK3326 (PortMaster) - Fixed Build
+name: Crack Smokin' Guns for RK3326 (PortMaster) - Ultra Optimized LTO Build
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Fixed.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Optimized.zip
   PORT_DIR: smokinguns
 
 jobs:
@@ -43,12 +43,13 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
           
-          # --- MAXIMUM PERFORMANCE FLAGS ---
+          # --- MAXIMUM PERFORMANCE FLAGS + LTO ---
           export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -w"
+          export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
           
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential git pkg-config ca-certificates wget file zip python3 xxd \
+            build-essential git pkg-config ca-certificates wget file zip python3 xxd ccache \
             libsdl1.2-dev libsdl2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
@@ -56,6 +57,11 @@ jobs:
             libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
             libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev
           git config --global --add safe.directory '*'
+
+          # Configure ccache for blazing-fast rebuilds
+          ccache -M 2G
+          export CC="ccache gcc"
+          export CXX="ccache g++"
 
           # CMake for GL4ES
           CMAKE_VERSION=3.28.3
@@ -110,12 +116,12 @@ jobs:
           make clean || true
 
           echo "==> Compiling Smokin' Guns binary and native shared libraries..."
-          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC=gcc \
+          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             BUILD_RENDERER_REND2=0 WERROR=0 CFLAGS="-w" \
-            OPTIMIZE="$OPTIMIZE"
+            OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
           CLIENT_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)"
@@ -203,7 +209,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Max-performance optimized Smokin' Guns port for RK3326.",
+              "desc": "Ultra-optimized LTO Smokin' Guns port with GL4ES batching for RK3326.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -215,7 +221,7 @@ jobs:
           cat > "$PKG/Smokin Guns.sh" <<'LAUNCH_EOF'
           #!/bin/bash
           # PortMaster launch script for Smokin' Guns (RK3326 / M9 Pro / R36S)
-          # Non-Blocking Exit Fix & Native 640x480 KMSDRM Rendering
+          # Non-Blocking Exit Fix, Max Performance GL4ES Batching & Native 640x480 KMSDRM Rendering
 
           GAMEDIR="/roms/ports/smokinguns"
           LOG_FILE="${GAMEDIR}/debug.log"
@@ -274,6 +280,13 @@ jobs:
           export LIBGL_FORCE16BITS=1
           export LIBGL_MIPMAP=3
           export LIBGL_NOINTOVLHACK=1
+
+          # --- GL4ES Draw Call & Shader Optimizations ---
+          export LIBGL_BATCH=100
+          export LIBGL_MAX_SPIN=100
+          export LIBGL_FASTMATH=1
+          export LIBGL_DEFAULT_LOG=0
+
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
@@ -285,17 +298,19 @@ jobs:
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
-            +set com_hunkMegs 256 \
+            +set com_hunkMegs 128 \
             +set com_maxfps 60 \
             +set cl_maxpackets 60 \
             +set rate 25000 \
             +set snaps 20 \
-            +set net_enabled 3 \
+            +set net_enabled 0 \
             +set vm_cgame 0 \
             +set vm_game 0 \
             +set vm_ui 0 \
             +set s_useOpenAL 0 \
-            +set s_mixahead 0.14 \
+            +set s_khz 22 \
+            +set s_mixahead 0.08 \
+            +set s_mixPreStep 0.05 \
             +set in_joystick 0 \
             +set in_mouse 1 \
             +set r_mode -1 \
@@ -303,34 +318,32 @@ jobs:
             +set r_customheight 480 \
             +set r_fullscreen 1 \
             +set r_noborder 1 \
+            +set r_finish 0 \
+            +set r_swapInterval 0 \
             +set r_vertexLight 1 \
             +set r_overBrightBits 0 \
             +set r_ignorehwgamma 1 \
             +set r_ext_compressed_textures 1 \
             +set r_ext_framebuffer 0 \
-            +set r_picmip 1 \
-            +set r_lodbias 2 \
-            +set r_subdivisions 12 \
-            +set r_detailtextures 0 \
+            +set r_picmip 0 \
+            +set r_lodbias 0 \
+            +set r_subdivisions 4 \
+            +set r_detailtextures 1 \
             +set r_texturebits 16 \
             +set r_colorbits 16 \
             +set r_dynamiclight 0 \
             +set r_shadows 0 \
             +set r_fastsky 1 \
             +set r_stencilbits 0 \
-            +set r_lodCurveError 1000 \
-            +set cg_shadows 1 \
-            +set cg_gibs 0 \
+            +set r_lodCurveError 250 \
+            +set cg_shadows 0 \
+            +set cg_gibs 1 \
             +set cg_marks 0 \
-            +set cg_impactparticles 0 \
+            +set cg_impactparticles 1 \
             +set cg_brassTime 0 \
-            +set cg_simpleItems 1 \
+            +set cg_simpleItems 0 \
             +set cg_draw3dIcons 0 \
-            +set cg_farclip 1 \
-            +set cg_hitmsg 1 \
-            +set cg_ownhitmsg 1 \
-            +set cg_hitfarmsg 1 \
-            +set s_khz 11 \
+            +set cg_farclip 0 \
             +set sensitivity 18 \
             +set cl_yawspeed 140 \
             +set cl_pitchspeed 140 \
@@ -371,6 +384,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-Fixed
+          name: SmokinGuns-PortMaster-RK3326-Optimized
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
