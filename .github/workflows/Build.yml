@@ -1,4 +1,4 @@
-name: Construct Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
+name: Levitate Smokin' Guns for RK3326 (PortMaster) - Native SDL 1.2 ARM64 Build
 
 on:
   workflow_dispatch:
@@ -10,13 +10,13 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Optimized.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Native-SDL12.zip
   PORT_DIR: smokinguns
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 350
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,17 +41,9 @@ jobs:
               if not os.path.exists(makefile):
                   print(f"[ERROR] {makefile} not found!")
                   sys.exit(1)
-
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
-
-              # --- FIX 1: Remove renderergl2 from build entirely ---
-              content = re.sub(
-                  r'RENDERER_GL2\s*=\s*[^\n]*\n',
-                  'RENDERER_GL2 =\n',
-                  content
-              )
-
+              content = re.sub(r'RENDERER_GL2\s*=\s*[^\n]*\n', 'RENDERER_GL2 =\n', content)
               lines = content.splitlines(keepends=True)
               new_lines = []
               for line in lines:
@@ -60,65 +52,39 @@ jobs:
                       continue
                   new_lines.append(line)
               content = "".join(new_lines)
-
-              content = re.sub(
-                  r'^\$\(B\)/renderergl2/[^\n]*\n',
-                  '',
-                  content,
-                  flags=re.MULTILINE
-              )
-
-              # --- FIX 2: Strip strict warning/error flags ---
+              content = re.sub(r'^\$\(B\)/renderergl2/[^\n]*\n', '', content, flags=re.MULTILINE)
               content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
-
-              # --- FIX 3: Make ALL rm commands safe ---
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
-
-              # --- FIX 4: Fix double-slash path bugs ---
               content = content.replace('//ui/', '/ui/')
               content = content.replace('//game/', '/game/')
               content = content.replace('//cgame/', '/cgame/')
-
-              # --- FIX 5: Ensure python3 is used ---
               content = content.replace('python ', 'python3 ')
               content = content.replace('python2 ', 'python3 ')
-
-              # --- FIX 6: ARCH_STRING consistency ---
               if not re.search(r'ARCH_STRING\s*=', content):
-                  content = re.sub(
-                      r'(ARCH\s*=\s*[^\n]*\n)',
-                      r'\1ARCH_STRING = aarch64\n',
-                      content,
-                      count=1
-                  )
-
+                  content = re.sub(r'(ARCH\s*=\s*[^\n]*\n)', r'\1ARCH_STRING = aarch64\n', content, count=1)
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: renderergl2 disabled, rm -f, python3, path fixes.")
+              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
               if not os.path.exists(path):
                   print(f"[ERROR] {path} not found!")
                   sys.exit(1)
-
               with open(path, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
-
               if re.search(r'ARCH_STRING\s+"aarch64"', content):
-                  print("[INFO] q_platform.h already has ARCH_STRING aarch64.")
+                  print("[INFO] q_platform.h bereits gepatcht.")
                   return
-
               if '__aarch64__' in content and 'ARCH_STRING' in content:
                   if re.search(r'__aarch64__.*?ARCH_STRING', content, re.DOTALL):
-                      print("[INFO] q_platform.h already handles __aarch64__ for ARCH_STRING.")
+                      print("[INFO] q_platform.h behandelt __aarch64__ bereits.")
                       return
-
               aarch64_override = (
-                  "/* [PATCHED] ARM64 ARCH_STRING override */\n"
+                  "/* [PATCHED] ARM64 ARCH_STRING Override */\n"
                   "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
                   "#ifdef ARCH_STRING\n"
                   "#undef ARCH_STRING\n"
@@ -129,17 +95,15 @@ jobs:
                   "#endif\n"
                   "#endif\n\n"
               )
-
               content = aarch64_override + content
-
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Injected ARCH_STRING 'aarch64' into q_platform.h.")
+              print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert.")
 
           if __name__ == "__main__":
               patch_makefile()
               patch_q_platform()
-              print("[DONE] All patches applied.")
+              print("[DONE] Alle Patches erfolgreich angewendet.")
           PY_EOF
 
       - name: Write in-container build script
@@ -169,14 +133,15 @@ jobs:
           export CC="ccache gcc"
           export CXX="ccache g++"
 
-          # --- CMake installation ---
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
 
-          # --- Build GL4ES ---
+          # =====================================================================
+          # SCHRITT 1: GL4ES bauen (OpenGL -> OpenGL ES 2.0 Uebersetzung)
+          # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -190,42 +155,67 @@ jobs:
           cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
           cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
-          # --- Build sdl12-compat ---
+          # =====================================================================
+          # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
+          # ANSTATT sdl12-compat (KEINE SDL1->SDL2 Uebersetzung!)
+          # =====================================================================
           cd /work/src
-          if [ ! -d sdl12-compat ]; then
-            git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
+          if [ ! -d SDL-1.2 ]; then
+            git clone --depth=1 --branch SDL-1.2 https://github.com/libsdl-org/SDL-1.2.git
           fi
-          cd sdl12-compat
-          # Conditional SDL_HINT fixes (only if needed)
-          if grep -q 'SDL_HINT_VIDEODRIVER' src/SDL12_compat.c 2>/dev/null; then
-            sed -i 's/SDL_HINT_VIDEODRIVER/"SDL_VIDEODRIVER"/g' src/SDL12_compat.c || true
-          fi
-          if grep -q 'SDL_HINT_AUDIODRIVER' src/SDL12_compat.c 2>/dev/null; then
-            sed -i 's/SDL_HINT_AUDIODRIVER/"SDL_AUDIODRIVER"/g' src/SDL12_compat.c || true
+          cd SDL-1.2
+
+          # SDL 1.2 benoetigt autotools fuer den Build
+          if [ ! -f configure ]; then
+            ./autogen.sh || true
           fi
 
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
-            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
-            -DCMAKE_C_FLAGS="$OPTIMIZE" \
-            -DSDL12TESTS=OFF
+          # ARM64-Optimierungen aktivieren
+          ./configure \
+            --prefix=/usr \
+            --disable-video-x11 \
+            --enable-video-fbcon \
+            --enable-video-directfb \
+            --disable-video-ps3 \
+            --disable-video-svga \
+            --disable-video-opengl \
+            --disable-audio-oss \
+            --disable-audio-dma \
+            --enable-audio-alsa \
+            --disable-joystick \
+            --disable-cdrom \
+            --disable-esd \
+            --disable-nas \
+            --disable-diskaudio \
+            --disable-pulseaudio \
+            --disable-arts \
+            --enable-shared \
+            --disable-static \
+            CFLAGS="$OPTIMIZE" \
+            LDFLAGS="$LDFLAGS"
+
           make -j"$(nproc)"
 
-          cp "$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
+          # Native libSDL-1.2.so.0 kopieren
+          cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          # --- Build Smokin' Guns ---
+          echo "==> Native SDL 1.2 Bibliothek gebaut:"
+          ls -la /work/out/libs.aarch64/
+
+          # =====================================================================
+          # SCHRITT 3: Smokin' Guns Engine + Native Module bauen
+          # =====================================================================
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
-          echo "==> Running patch script..."
+          echo "==> Patch-Skript ausfuehren..."
           python3 /work/patch_arm64.py
 
-          echo "==> Cleaning stale artifacts..."
+          echo "==> Alte Artefakte bereinigen..."
           make clean || true
 
-          echo "==> Compiling Smokin' Guns (NO renderergl2, native modules only)..."
+          echo "==> Smokin' Guns kompilieren (OHNE renderergl2, NUR native Module)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
@@ -235,44 +225,42 @@ jobs:
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          echo "==> Build output: $BUILD_OUT"
+          echo "==> Build-Ausgabe: $BUILD_OUT"
 
           if [ -z "$BUILD_OUT" ] || [ ! -d "$BUILD_OUT" ]; then
-            echo "[ERROR] Build output directory not found!"
+            echo "[ERROR] Build-Ausgabeverzeichnis nicht gefunden!"
             find /work/src/SmokinGuns/build -maxdepth 2 -type d 2>/dev/null || true
             exit 1
           fi
 
-          echo "==> Contents of BUILD_OUT:"
+          echo "==> Inhalt von BUILD_OUT:"
           ls -la "$BUILD_OUT"
 
-          # Auto-detect the engine executable
           ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
           if [ -z "$ENGINE_BIN" ]; then
-            echo "[ERROR] No engine executable found in $BUILD_OUT"
+            echo "[ERROR] Keine Engine-Binary in $BUILD_OUT gefunden"
             exit 1
           fi
-          echo "==> Detected engine binary: $ENGINE_BIN"
+          echo "==> Engine-Binary erkannt: $ENGINE_BIN"
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          # Copy native .so modules (cgame, qagame, ui)
-          echo "==> Locating native modules..."
+          echo "==> Native .so-Module suchen..."
           find "$BUILD_OUT" -name '*.so' -type f -print
           find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
 
-          echo "==> Final game output:"
+          echo "==> Finale Spiel-Ausgabe:"
           ls -la /work/out/game/
 
           for mod in cgame qagame ui; do
             if ls /work/out/game/${mod}*.so 1>/dev/null 2>&1; then
-              echo "  [OK] ${mod}.so found"
+              echo "  [OK] ${mod}.so gefunden"
             else
-              echo "  [WARN] ${mod}.so NOT found!"
+              echo "  [WARN] ${mod}.so NICHT gefunden!"
             fi
           done
 
-          echo "==> Build complete!"
+          echo "==> Build abgeschlossen!"
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
@@ -288,22 +276,17 @@ jobs:
           mkdir -p "$PKG/${PORT_DIR}/libs.aarch64"
           mkdir -p "$PKG/${PORT_DIR}/${PORT_DIR}"
 
-          # Engine binary
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
 
-          # Native .so modules - placed in the game directory
           find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \; 2>/dev/null || true
-
-          # Also copy .so files to the main dir as fallback
           find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; 2>/dev/null || true
 
-          # Runtime libraries
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
-          echo "=== Package contents ==="
+          echo "=== Paketinhalt ==="
           find "$PKG" -type f | sort
 
           cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
@@ -315,7 +298,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and sdl12-compat. No QVM, no renderergl2.",
+              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2. No sdl12-compat translation, no QVM, no renderergl2.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -351,7 +334,6 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          # Performance tuning
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
 
           export LIBGL_ES=2
@@ -364,8 +346,9 @@ jobs:
           export LIBGL_BATCH=100
           export LIBGL_FASTMATH=1
 
-          export SDL_VIDEODRIVER=kmsdrm
+          export SDL_VIDEODRIVER=fbcon
           export SDL_AUDIODRIVER=alsa
+          export SDL_FBDEV=/dev/fb0
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
@@ -404,6 +387,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-Optimized
+          name: SmokinGuns-PortMaster-RK3326-Native-SDL12
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
