@@ -8,34 +8,24 @@ def patch_makefile():
         sys.exit(1)
         
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()
+        content = f.read()
 
-    new_lines = []
-    for line in lines:
-        # 1. Strip out strict -Werror and diagnostic flags
-        line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
-        line = re.sub(r'-Wmaybe-uninitialized', '', line)
-        
-        # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
-        line = re.sub(r'\brm\s+', 'rm -f ', line)
+    # 1. Strip out strict -Werror and diagnostic flags
+    content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
+    content = re.sub(r'-Wmaybe-uninitialized', '', content)
+    
+    # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
+    content = re.sub(r'\brm\s+', 'rm -f ', content)
 
-        # 3. Target any directory/path variable assignment and strip trailing slashes
-        if re.match(r'^[A-Z_]*(?:DIR|PATH|BUILDDIR)\s*[:+?]?=', line):
-            parts = line.split('#', 1)
-            val_part = parts[0].rstrip()
-            val_part = re.sub(r'/+\s*$', '', val_part)
-            line = val_part + (' #' + parts[1] if len(parts) > 1 else '\n')
+    # 3. Aggressively strip trailing slashes from any directory/path/builddir variable assignment
+    content = re.sub(r'^([A-Z_]*(?:DIR|PATH|BUILDDIR)\s*[:+?]?=\s*)([^#\r\n]+?)/+\s*$', r'\1\2', content, flags=re.MULTILINE)
 
-        # 4. Automatically disable sdl12-compat tests in any cmake command to speed up build
-        if 'cmake' in line and 'SDL12TESTS' not in line:
-            line = line.rstrip() + ' -DSDL12TESTS=OFF\n'
+    # 4. Recursively flatten ANY double slashes in the entire Makefile text until clean
+    while '//' in content:
+        content = content.replace('//', '/')
 
-        new_lines.append(line)
-
-    content = "".join(new_lines)
-
-    # 5. Global cleanup of any lingering double slashes in paths
-    content = content.replace('//', '/')
+    # 5. Automatically disable sdl12-compat tests in any cmake command to speed up build
+    content = re.sub(r'(cmake\s+[^#\r\n]+)', r'\1 -DSDL12TESTS=OFF', content)
 
     # 6. Inject safe compiler overrides and disable rend2 renderer
     patch = """
@@ -46,7 +36,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile fully updated: paths fixed, rm safe, and sdl12-compat tests disabled.")
+    print("[PATCHED] Makefile fully cleaned: double slashes flattened and variables normalized.")
 
 def patch_q_platform():
     patched = 0
