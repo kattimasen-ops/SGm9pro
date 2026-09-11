@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert) - MAXIMUM PERFORMANCE
-- Fuegt LIB=lib64 fuer ARCH=aarch64 in die Makefile ein (offizieller ioquake3-Patch)
-- Entfernt renderergl2 aus der TARGETS-Variable der Makefile
-- Erzwingt ARCH_STRING "aarch64" in q_platform.h
-- Macht rm-Befehle safe
-- Stellt sicher, dass python3 verwendet wird
-- Erzwingt -O3 und -fno-plt
+ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert)
+Basiert auf dem offiziellen ioquake3-Patch von Martin Michlmayr (Debian)
+https://github.com/ioquake/ioq3/commit/ebb69f699cd1392cbe7a865f9f51dbbecdd99b59
 """
 
 import os
@@ -24,31 +20,31 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 1: LIB=lib64 fuer ARCH=aarch64 einfuegen (offizieller ioquake3-Patch) ---
-    # Die Makefile setzt LIB fuer verschiedene Architekturen. Fuer aarch64 fehlt es.
-    # Wir suchen nach dem Block, in dem LIB fuer andere Architekturen gesetzt wird,
-    # und fuegen aarch64 hinzu.
+    # --- FIX 1: LIB=lib64 fuer ARCH=aarch64 (offizieller ioquake3-Patch) ---
+    # Der Patch fuegt nach dem s390x-Block einen aarch64-Block ein.
     if 'ARCH,aarch64' not in content:
-        # Suche nach dem Muster "ifeq ($(ARCH),s390x)" oder aehnlich
-        # und fuege davor/danach den aarch64-Block ein.
         pattern = r'(\s*else ifeq \(\$\(ARCH\),s390x\)\s*\n\s*LIB=lib64\s*\n)'
         replacement = r'\1else ifeq ($(ARCH),aarch64)\n  LIB=lib64\n'
         content, count = re.subn(pattern, replacement, content)
         if count == 0:
-            # Fallback: Suche nach "LIB=lib" und fuege davor ein
+            # Fallback: Fuege vor der ersten LIB=lib-Zeile ein
             pattern2 = r'(\s*LIB=lib\s*\n)'
-            content, count = re.subn(pattern2, r'ifeq ($(ARCH),aarch64)\n  LIB=lib64\nendif\n\1', content)
+            content, count = re.subn(
+                pattern2,
+                r'ifeq ($(ARCH),aarch64)\n  LIB=lib64\nendif\n\1',
+                content
+            )
             if count == 0:
-                print("[WARN] Konnte LIB=lib64 fuer aarch64 nicht automatisch einfuegen.")
-                print("[WARN] Fuege es manuell hinzu, falls der Build fehlschlaegt.")
+                print("[WARN] LIB=lib64 fuer aarch64 konnte nicht automatisch eingefuegt werden.")
             else:
                 print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (Fallback).")
         else:
-            print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt.")
+            print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
     else:
         print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
 
     # --- FIX 2: renderergl2 aus der TARGETS-Variable entfernen ---
+    # ioquake3 auf ARM64 hat keinen funktionierenden renderergl2.
     lines = content.splitlines(keepends=True)
     new_lines = []
     for line in lines:
@@ -77,16 +73,7 @@ def patch_makefile():
     # --- FIX 6: -O2 durch -O3 ersetzen ---
     content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
 
-    # --- FIX 7: -fno-plt hinzufuegen ---
-    if '-fno-plt' not in content:
-        content = re.sub(
-            r'(OPTIMIZE\s*=\s*[^\n]*)',
-            r'\1 -fno-plt',
-            content,
-            count=1
-        )
-
-    # --- FIX 8: Strikte Warn-Flags entfernen ---
+    # --- FIX 7: Strikte Warn-Flags entfernen ---
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
     content = re.sub(r'-Wuninitialized', '', content)
@@ -94,7 +81,7 @@ def patch_makefile():
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: LIB=lib64, renderergl2 deaktiviert, rm -f, python3, O3, fno-plt.")
+    print("[PATCHED] Makefile: LIB=lib64, renderergl2 deaktiviert, rm -f, python3, O3.")
 
 
 def rename_renderergl2_dir():
@@ -123,8 +110,7 @@ def patch_q_platform():
         print("[INFO] q_platform.h bereits gepatcht.")
         return
 
-    # Offizieller ioquake3-Patch: Fuege aarch64 zu der ARCH_STRING-Kette hinzu.
-    # Suche nach der Stelle, an der "arm" definiert wird.
+    # Offizieller ioquake3-Patch: Fuege aarch64 zur ARCH_STRING-Kette hinzu.
     pattern = r'(#elif defined __arm__\s*\n#define ARCH_STRING "arm"\s*\n)'
     replacement = r'\1#elif defined __aarch64__\n#define ARCH_STRING "aarch64"\n'
     content, count = re.subn(pattern, replacement, content)
