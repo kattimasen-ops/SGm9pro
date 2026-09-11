@@ -47,18 +47,21 @@ def patch_q_platform():
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             
+            # Forcefully undefine and correctly redefine ARCH_STRING as a proper string literal
             aarch64_override = (
                 "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
-                "#ifndef ARCH_STRING\n"
-                "#define ARCH_STRING \"aarch64\"\n"
+                "#ifdef ARCH_STRING\n"
+                "#undef ARCH_STRING\n"
                 "#endif\n"
+                "#define ARCH_STRING \"aarch64\"\n"
                 "#ifndef Q3_LITTLE_ENDIAN\n"
                 "#define Q3_LITTLE_ENDIAN\n"
                 "#endif\n"
                 "#endif\n\n"
             )
-            if "ARCH_STRING" not in content:
-                content = aarch64_override + content
+            
+            # Prepend the override to ensure it takes precedence over compiler flags
+            content = aarch64_override + content
 
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
