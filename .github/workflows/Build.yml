@@ -44,7 +44,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           
           # --- MAXIMUM PERFORMANCE FLAGS ---
-          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -Wno-error -Wno-maybe-uninitialized"
+          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -w"
           
           apt-get update
           apt-get install -y --no-install-recommends \
@@ -106,7 +106,7 @@ jobs:
           echo "==> Running patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Cleaning stale artifacts to prevent renderergl2 glsl conflicts..."
+          echo "==> Cleaning stale artifacts..."
           make clean || true
 
           echo "==> Compiling Smokin' Guns binary and native shared libraries..."
@@ -114,7 +114,7 @@ jobs:
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            BUILD_RENDERER_REND2=0 WERROR=0 \
+            BUILD_RENDERER_REND2=0 WERROR=0 CFLAGS="-w" \
             OPTIMIZE="$OPTIMIZE"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
@@ -214,42 +214,152 @@ jobs:
 
           cat > "$PKG/Smokin Guns.sh" <<'LAUNCH_EOF'
           #!/bin/bash
-          PLAY_MODE="online"
-
-          controlfolder="/roms/ports"
-          [ -f "${controlfolder}/portmaster.sh" ] && source "${controlfolder}/portmaster.sh"
+          # PortMaster launch script for Smokin' Guns (RK3326 / M9 Pro / R36S)
+          # Non-Blocking Exit Fix & Native 640x480 KMSDRM Rendering
 
           GAMEDIR="/roms/ports/smokinguns"
-          cd "$GAMEDIR" || exit 1
+          LOG_FILE="${GAMEDIR}/debug.log"
+          exec > >(tee -a "$LOG_FILE") 2>&1
 
-          export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
+          # --- PortMaster Control Setup ---
+          XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+          if [ -d "/opt/system/Tools/PortMaster/" ]; then
+              controlfolder="/opt/system/Tools/PortMaster"
+          elif [ -d "/opt/tools/PortMaster/" ]; then
+              controlfolder="/opt/tools/PortMaster"
+          elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
+              controlfolder="$XDG_DATA_HOME/PortMaster"
+          else
+              controlfolder="/roms/ports/PortMaster"
+          fi
+
+          if [ -f "${controlfolder}/control.txt" ]; then
+              source "${controlfolder}/control.txt"
+              [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
+              get_controls
+          else
+              echo "ERROR: ${controlfolder}/control.txt not found." >&2
+          fi
+
+          cd "$GAMEDIR" || exit 1
+          export HOME="${GAMEDIR}"
+          mkdir -p "${GAMEDIR}/.smokinguns"
+
+          # --- 1. Deactivate Non-Essential Background Processes ---
+          $ESUDO systemctl stop smbd 2>/dev/null || true
+          $ESUDO systemctl stop nmbd 2>/dev/null || true
+          $ESUDO systemctl stop dropbear 2>/dev/null || true
+          $ESUDO systemctl stop ssh 2>/dev/null || true
+          $ESUDO systemctl stop bluetooth 2>/dev/null || true
+          killall -9 mpg123 2>/dev/null || true
+          killall -9 ffplay 2>/dev/null || true
+
+          # --- 2. CPU Governor & Memory Tuning ---
+          renice -n -15 $$ 2>/dev/null || true
+          echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
+          $ESUDO sysctl -w vm.swappiness=10 2>/dev/null || true
+          $ESUDO sysctl -w vm.vfs_cache_pressure=50 2>/dev/null || true
+          $ESUDO sysctl -w vm.overcommit_memory=1 2>/dev/null || true
+
+          $ESUDO sync
+          echo 3 | $ESUDO tee /proc/sys/vm/drop_caches 2>/dev/null || true
+
+          # --- 3. Stable GL4ES & KMSDRM Environment ---
           export LIBGL_ES=2
-          export LIBGL_GL=1
+          export LIBGL_GL=21
+          export LIBGL_NOTEST=1
+          export LIBGL_FB=1
+          export LIBGL_FBO=0
+          export LIBGL_NOERROR=1
+          export LIBGL_FORCE16BITS=1
+          export LIBGL_MIPMAP=3
           export LIBGL_NOINTOVLHACK=1
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
+          export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
+          EXTRA_SETTINGS="+set sv_pure 0 +set vm_cgame 0 +set vm_game 0 +set vm_ui 0"
+
+          # --- 4. Launch Engine ---
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
-
-          if [ "$PLAY_MODE" = "online" ]; then
-              EXTRA_SETTINGS=""
-          else
-              EXTRA_SETTINGS="+set sv_pure 0 +set vm_cgame 0 +set vm_game 0 +set vm_ui 0"
-          fi
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
+            +set com_maxfps 60 \
+            +set cl_maxpackets 60 \
+            +set rate 25000 \
+            +set snaps 20 \
+            +set net_enabled 3 \
+            +set vm_cgame 0 \
+            +set vm_game 0 \
+            +set vm_ui 0 \
+            +set s_useOpenAL 0 \
+            +set s_mixahead 0.14 \
+            +set in_joystick 0 \
+            +set in_mouse 1 \
             +set r_mode -1 \
             +set r_customwidth 640 \
             +set r_customheight 480 \
             +set r_fullscreen 1 \
+            +set r_noborder 1 \
+            +set r_vertexLight 1 \
+            +set r_overBrightBits 0 \
+            +set r_ignorehwgamma 1 \
+            +set r_ext_compressed_textures 1 \
+            +set r_ext_framebuffer 0 \
+            +set r_picmip 1 \
+            +set r_lodbias 2 \
+            +set r_subdivisions 12 \
+            +set r_detailtextures 0 \
+            +set r_texturebits 16 \
+            +set r_colorbits 16 \
+            +set r_dynamiclight 0 \
+            +set r_shadows 0 \
+            +set r_fastsky 1 \
+            +set r_stencilbits 0 \
+            +set r_lodCurveError 1000 \
+            +set cg_shadows 1 \
+            +set cg_gibs 0 \
+            +set cg_marks 0 \
+            +set cg_impactparticles 0 \
+            +set cg_brassTime 0 \
+            +set cg_simpleItems 1 \
+            +set cg_draw3dIcons 0 \
+            +set cg_farclip 1 \
+            +set cg_hitmsg 1 \
+            +set cg_ownhitmsg 1 \
+            +set cg_hitfarmsg 1 \
+            +set s_khz 11 \
+            +set sensitivity 18 \
+            +set cl_yawspeed 140 \
+            +set cl_pitchspeed 140 \
             +set fs_basepath "${GAMEDIR}" \
             +set fs_homepath "${GAMEDIR}" \
             +set fs_game smokinguns \
             $EXTRA_SETTINGS
 
-          kill_gptokeyb
+          # --- 5. Clean Non-Blocking Exit & TTY Recovery ---
+          unset LD_PRELOAD
+          unset LD_LIBRARY_PATH
+
+          $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null || true
+
+          # Restore background services asynchronously so the script exits instantly
+          (
+            $ESUDO systemctl start smbd 2>/dev/null || true
+            $ESUDO systemctl start nmbd 2>/dev/null || true
+            $ESUDO systemctl start dropbear 2>/dev/null || true
+            $ESUDO systemctl start ssh 2>/dev/null || true
+            $ESUDO systemctl start bluetooth 2>/dev/null || true
+          ) &
+
+          # Force virtual terminal reset to restore EmulationStation screen buffer
+          $ESUDO setterm -cursor on > /dev/tty1 2>/dev/null || true
+          printf "\033c" > /dev/tty1 2>/dev/null || true
+
+          echo "Game exited cleanly. Returning to menu."
+          exit 0
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
 
