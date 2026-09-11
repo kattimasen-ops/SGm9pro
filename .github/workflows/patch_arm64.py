@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert) - MAXIMUM PERFORMANCE
-- Entfernt renderergl2 (nicht ARM64-kompatibel)
+- Entfernt renderergl2 aus der TARGETS-Variable der Makefile
+- Benennt das renderergl2-Verzeichnis um, falls vorhanden
 - Erzwingt ARCH_STRING "aarch64"
 - Macht rm-Befehle safe
 - Korrigiert Pfad-Expansion
@@ -12,6 +13,7 @@ ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert) - MAXIMUM PERFORMANCE
 import os
 import sys
 import re
+import shutil
 
 
 def patch_makefile():
@@ -23,39 +25,33 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 1: renderergl2 komplett deaktivieren ---
-    content = re.sub(r'RENDERER_GL2\s*=\s*[^\n]*\n', 'RENDERER_GL2 =\n', content)
-
+    # --- FIX 1: renderergl2 aus der TARGETS-Variable entfernen ---
+    # Die Makefile fuegt renderer_opengl2 ueber eine Zeile wie
+    # "TARGETS += $(B)/renderer_opengl2_$(SHLIBNAME)" hinzu.
+    # Wir suchen nach Zeilen, die "renderer_opengl2" enthalten, und
+    # kommentieren sie aus.
     lines = content.splitlines(keepends=True)
     new_lines = []
     for line in lines:
-        if 'renderergl2' in line and ('BUILD_' in line or 'TARGET' in line or 'RENDERER' in line):
+        if 'renderer_opengl2' in line or 'renderergl2' in line:
             new_lines.append('# [PATCHED] Disabled renderergl2: ' + line)
             continue
         new_lines.append(line)
     content = "".join(new_lines)
 
-    content = re.sub(r'^\$\(B\)/renderergl2/[^\n]*\n', '', content, flags=re.MULTILINE)
-
-    # --- FIX 2: Strikte Warn-Flags entfernen ---
-    content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
-    content = re.sub(r'-Wmaybe-uninitialized', '', content)
-    content = re.sub(r'-Wuninitialized', '', content)
-    content = re.sub(r'-Wstrict-overflow', '', content)
-
-    # --- FIX 3: rm-Befehle safe machen ---
+    # --- FIX 2: rm-Befehle safe machen ---
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
-    # --- FIX 4: Doppelte Slashes korrigieren ---
+    # --- FIX 3: Doppelte Slashes korrigieren ---
     content = content.replace('//ui/', '/ui/')
     content = content.replace('//game/', '/game/')
     content = content.replace('//cgame/', '/cgame/')
 
-    # --- FIX 5: python3 erzwingen ---
+    # --- FIX 4: python3 erzwingen ---
     content = content.replace('python ', 'python3 ')
     content = content.replace('python2 ', 'python3 ')
 
-    # --- FIX 6: ARCH_STRING-Konsistenz ---
+    # --- FIX 5: ARCH_STRING-Konsistenz ---
     if not re.search(r'ARCH_STRING\s*=', content):
         content = re.sub(
             r'(ARCH\s*=\s*[^\n]*\n)',
@@ -64,10 +60,10 @@ def patch_makefile():
             count=1
         )
 
-    # --- FIX 7: -O2 durch -O3 ersetzen ---
+    # --- FIX 6: -O2 durch -O3 ersetzen ---
     content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
 
-    # --- FIX 8: -fno-plt hinzufuegen, falls nicht vorhanden ---
+    # --- FIX 7: -fno-plt hinzufuegen, falls nicht vorhanden ---
     if '-fno-plt' not in content:
         content = re.sub(
             r'(OPTIMIZE\s*=\s*[^\n]*)',
@@ -76,9 +72,28 @@ def patch_makefile():
             count=1
         )
 
+    # --- FIX 8: Strikte Warn-Flags entfernen ---
+    content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
+    content = re.sub(r'-Wmaybe-uninitialized', '', content)
+    content = re.sub(r'-Wuninitialized', '', content)
+    content = re.sub(r'-Wstrict-overflow', '', content)
+
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt.")
+    print("[PATCHED] Makefile: renderergl2 aus TARGETS entfernt, rm -f, python3, O3, fno-plt.")
+
+
+def rename_renderergl2_dir():
+    """Benennt das renderergl2-Verzeichnis um, falls es existiert, damit der Build es nicht findet."""
+    renderergl2_dir = "code/renderergl2"
+    if os.path.isdir(renderergl2_dir):
+        backup_dir = "code/renderergl2.disabled"
+        if os.path.isdir(backup_dir):
+            shutil.rmtree(backup_dir)
+        os.rename(renderergl2_dir, backup_dir)
+        print(f"[PATCHED] {renderergl2_dir} -> {backup_dir} umbenannt.")
+    else:
+        print(f"[INFO] {renderergl2_dir} existiert nicht, kein Umbenennen noetig.")
 
 
 def patch_q_platform():
@@ -121,5 +136,6 @@ def patch_q_platform():
 
 if __name__ == "__main__":
     patch_makefile()
+    rename_renderergl2_dir()
     patch_q_platform()
     print("[DONE] Alle Patches erfolgreich angewendet.")
