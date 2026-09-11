@@ -1,4 +1,4 @@
-name: Crack Smokin' Guns for RK3326 (PortMaster) - Ultra Optimized LTO Build
+name: meth Smokin' Guns for RK3326 (PortMaster) - Fully Optimized
 
 on:
   workflow_dispatch:
@@ -49,7 +49,6 @@ jobs:
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
-              
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
               lines = content.splitlines(keepends=True)
@@ -62,51 +61,46 @@ jobs:
                   new_lines.append(line)
               content = "".join(new_lines)
 
-              content = content.replace('//ui/', '/ui/')
+              content = content.replace('//ui/', '/ui/').replace('//game/', '/game/').replace('//cgame/', '/cgame/')
 
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile safely patched without corrupting line continuations.")
+              print("[PATCHED] Makefile path expansions and warning flags cleaned.")
 
           def patch_q_platform():
-              patched = 0
-              for root, dirs, files in os.walk("code"):
-                  for file in files:
-                      if file != "q_platform.h":
-                          continue
-                      path = os.path.join(root, file)
-                      with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                          content = f.read()
-                      
-                      aarch64_override = (
-                          "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
-                          "#ifdef ARCH_STRING\n"
-                          "#undef ARCH_STRING\n"
-                          "#endif\n"
-                          "#define ARCH_STRING \"aarch64\"\n"
-                          "#ifndef Q3_LITTLE_ENDIAN\n"
-                          "#define Q3_LITTLE_ENDIAN\n"
-                          "#endif\n"
-                          "#endif\n\n"
-                      )
-                      content = aarch64_override + content
+              path = "code/qcommon/q_platform.h"
+              if not os.path.exists(path):
+                  print(f"[ERROR] {path} not found!")
+                  sys.exit(1)
+                  
+              with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                  content = f.read()
+              
+              if 'ARCH_STRING "aarch64"' in content:
+                  print("[INFO] q_platform.h already patched.")
+                  return
 
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(content)
-                      patched += 1
-                      
-              if patched == 0:
-                  print("[WARNING] No q_platform.h files found!")
-              else:
-                  print(f"[INFO] Patched {patched} q_platform.h files successfully.")
+              aarch64_override = (
+                  "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
+                  "#ifdef ARCH_STRING\n"
+                  "#undef ARCH_STRING\n"
+                  "#endif\n"
+                  "#define ARCH_STRING \"aarch64\"\n"
+                  "#ifndef Q3_LITTLE_ENDIAN\n"
+                  "#define Q3_LITTLE_ENDIAN\n"
+                  "#endif\n"
+                  "#endif\n\n"
+              )
+              content = aarch64_override + content
+
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("[PATCHED] Successfully injected ARCH_STRING override into code/qcommon/q_platform.h.")
 
           if __name__ == "__main__":
-              if not os.path.exists("Makefile"):
-                  print("[ERROR] Makefile not present in current working directory.")
-                  sys.exit(1)
               patch_makefile()
               patch_q_platform()
-              print("[DONE] All patches applied cleanly.")
+              print("[DONE] All local source patches applied successfully.")
           PY_EOF
 
       - name: Write in-container build script
@@ -118,7 +112,6 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
           
-          # --- MAXIMUM PERFORMANCE FLAGS + LTO ---
           export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
           
@@ -133,12 +126,11 @@ jobs:
             libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev
           git config --global --add safe.directory '*'
 
-          # Configure ccache for blazing-fast rebuilds
           ccache -M 2G
           export CC="ccache gcc"
           export CXX="ccache g++"
 
-          # CMake for GL4ES
+          # CMake installation
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
@@ -149,32 +141,26 @@ jobs:
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
-          mkdir -p build
-          cd build
+          mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="$OPTIMIZE" \
             -DNOX11=ON -DGLX_STUBS=ON -DEGL_WRAPPER=ON -DGBM=ON \
             -DSTATICLIB=OFF -DDEFAULT_ES=2 -DNOERROR=ON
           make -j"$(nproc)"
           
-          GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
-          EGL_LIB="$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)"
-          cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
-          cp "$EGL_LIB" /work/out/libs.aarch64/libEGL.so.1
+          cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
+          cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
-          # --- Build libsdl1.2-compat from source (Tests Disabled) ---
+          # --- Build sdl12-compat ---
           cd /work/src
           if [ ! -d sdl12-compat ]; then
             git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
           fi
           cd sdl12-compat
-          
-          # Patch missing SDL 2.24+ hint macros for Ubuntu 20.04 legacy headers
           sed -i 's/SDL_HINT_VIDEODRIVER/"SDL_VIDEODRIVER"/g' src/SDL12_compat.c || true
           sed -i 's/SDL_HINT_AUDIODRIVER/"SDL_AUDIODRIVER"/g' src/SDL12_compat.c || true
 
-          mkdir -p build
-          cd build
+          mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
@@ -182,8 +168,7 @@ jobs:
             -DSDL12TESTS=OFF
           make -j"$(nproc)"
           
-          SDL12_COMPAT_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
-          cp "$SDL12_COMPAT_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
+          cp "$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
           # --- Build Smokin' Guns ---
           cd /work/src
@@ -196,8 +181,8 @@ jobs:
           echo "==> Cleaning stale artifacts..."
           make clean || true
 
-          echo "==> Compiling Smokin' Guns binary and native shared libraries..."
-          make -j"$(nproc)" V=1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
+          echo "==> Compiling Smokin' Guns binary and modules sequentially (-j1 to avoid race conditions)..."
+          make release -j1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
@@ -206,8 +191,7 @@ jobs:
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          CLIENT_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)"
-          cp "$CLIENT_BIN" /work/out/game/smokinguns.aarch64
+          cp "$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
           find "$BUILD_OUT" -name '*.so' -exec cp {} /work/out/game/ \; || true
 
@@ -302,14 +286,10 @@ jobs:
 
           cat > "$PKG/Smokin Guns.sh" <<'LAUNCH_EOF'
           #!/bin/bash
-          # PortMaster launch script for Smokin' Guns (RK3326 / M9 Pro / R36S)
-          # Non-Blocking Exit Fix, Max Performance GL4ES Batching & Native 640x480 KMSDRM Rendering
-
           GAMEDIR="/roms/ports/smokinguns"
           LOG_FILE="${GAMEDIR}/debug.log"
           exec > >(tee -a "$LOG_FILE") 2>&1
 
-          # --- PortMaster Control Setup ---
           XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
           if [ -d "/opt/system/Tools/PortMaster/" ]; then
               controlfolder="/opt/system/Tools/PortMaster"
@@ -325,34 +305,15 @@ jobs:
               source "${controlfolder}/control.txt"
               [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
               get_controls
-          else
-              echo "ERROR: ${controlfolder}/control.txt not found." >&2
           fi
 
           cd "$GAMEDIR" || exit 1
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          # --- 1. Deactivate Non-Essential Background Processes ---
-          $ESUDO systemctl stop smbd 2>/dev/null || true
-          $ESUDO systemctl stop nmbd 2>/dev/null || true
-          $ESUDO systemctl stop dropbear 2>/dev/null || true
-          $ESUDO systemctl stop ssh 2>/dev/null || true
-          $ESUDO systemctl stop bluetooth 2>/dev/null || true
-          killall -9 mpg123 2>/dev/null || true
-          killall -9 ffplay 2>/dev/null || true
-
-          # --- 2. CPU Governor & Memory Tuning ---
-          renice -n -15 $$ 2>/dev/null || true
+          # Performance tuning
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-          $ESUDO sysctl -w vm.swappiness=10 2>/dev/null || true
-          $ESUDO sysctl -w vm.vfs_cache_pressure=50 2>/dev/null || true
-          $ESUDO sysctl -w vm.overcommit_memory=1 2>/dev/null || true
 
-          $ESUDO sync
-          echo 3 | $ESUDO tee /proc/sys/vm/drop_caches 2>/dev/null || true
-
-          # --- 3. Stable GL4ES & KMSDRM Environment ---
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
@@ -360,100 +321,36 @@ jobs:
           export LIBGL_FBO=0
           export LIBGL_NOERROR=1
           export LIBGL_FORCE16BITS=1
-          export LIBGL_MIPMAP=3
-          export LIBGL_NOINTOVLHACK=1
-
-          # --- GL4ES Draw Call & Shader Optimizations ---
           export LIBGL_BATCH=100
-          export LIBGL_MAX_SPIN=100
           export LIBGL_FASTMATH=1
-          export LIBGL_DEFAULT_LOG=0
 
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
-          EXTRA_SETTINGS="+set sv_pure 0 +set vm_cgame 0 +set vm_game 0 +set vm_ui 0"
-
-          # --- 4. Launch Engine ---
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
             +set com_maxfps 60 \
-            +set cl_maxpackets 60 \
-            +set rate 25000 \
-            +set snaps 20 \
             +set net_enabled 0 \
             +set vm_cgame 0 \
             +set vm_game 0 \
             +set vm_ui 0 \
             +set s_useOpenAL 0 \
-            +set s_khz 22 \
-            +set s_mixahead 0.08 \
-            +set s_mixPreStep 0.05 \
-            +set in_joystick 0 \
-            +set in_mouse 1 \
-            +set r_mode -1 \
             +set r_customwidth 640 \
             +set r_customheight 480 \
             +set r_fullscreen 1 \
-            +set r_noborder 1 \
-            +set r_finish 0 \
-            +set r_swapInterval 0 \
-            +set r_vertexLight 1 \
-            +set r_overBrightBits 0 \
-            +set r_ignorehwgamma 1 \
-            +set r_ext_compressed_textures 1 \
-            +set r_ext_framebuffer 0 \
-            +set r_picmip 2 \
-            +set r_lodbias 0 \
-            +set r_subdivisions 12 \
-            +set r_detailtextures 0 \
-            +set r_texturebits 16 \
-            +set r_colorbits 16 \
-            +set r_dynamiclight 0 \
-            +set r_shadows 0 \
-            +set r_fastsky 1 \
-            +set r_stencilbits 0 \
-            +set r_lodCurveError 250 \
-            +set cg_shadows 0 \
-            +set cg_gibs 0 \
-            +set cg_marks 0 \
-            +set cg_impactparticles 0 \
-            +set cg_brassTime 0 \
-            +set cg_simpleItems 0 \
-            +set cg_draw3dIcons 0 \
-            +set cg_farclip 0 \
-            +set sensitivity 18 \
-            +set cl_yawspeed 140 \
-            +set cl_pitchspeed 140 \
             +set fs_basepath "${GAMEDIR}" \
             +set fs_homepath "${GAMEDIR}" \
-            +set fs_game smokinguns \
-            $EXTRA_SETTINGS
+            +set fs_game smokinguns
 
-          # --- 5. Clean Non-Blocking Exit & TTY Recovery ---
           unset LD_PRELOAD
           unset LD_LIBRARY_PATH
-
           $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null || true
-
-          # Restore background services asynchronously so the script exits instantly
-          (
-            $ESUDO systemctl start smbd 2>/dev/null || true
-            $ESUDO systemctl start nmbd 2>/dev/null || true
-            $ESUDO systemctl start dropbear 2>/dev/null || true
-            $ESUDO systemctl start ssh 2>/dev/null || true
-            $ESUDO systemctl start bluetooth 2>/dev/null || true
-          ) &
-
-          # Force virtual terminal reset to restore EmulationStation screen buffer
           $ESUDO setterm -cursor on > /dev/tty1 2>/dev/null || true
           printf "\033c" > /dev/tty1 2>/dev/null || true
-
-          echo "Game exited cleanly. Returning to menu."
           exit 0
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
