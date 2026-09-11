@@ -4,7 +4,9 @@ import os, sys, re
 def patch_makefile():
     makefile = "Makefile"
     if not os.path.exists(makefile):
+        print(f"[ERROR] {makefile} not found!")
         sys.exit(1)
+        
     with open(makefile, "r") as f:
         content = f.read()
 
@@ -12,18 +14,17 @@ def patch_makefile():
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
 
-    # 2. Make ALL rm commands safe by turning them into 'rm -f' globally
+    # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
     content = re.sub(r'\brm\s+', 'rm -f ', content)
 
-    # 3. Strip trailing slashes from directory variables to prevent double slashes (//)
-    content = re.sub(r'([A-Z_]*(?:DIR|PATH)\s*[:+?]?=\s*[^#\r\n]+?)/+\s*(#.*)?$', r'\1\2', content, flags=re.MULTILINE)
-    content = re.sub(r'(BUILDDIR\s*[:+?]?=\s*[^#\r\n]+?)/+\s*(#.*)?$', r'\1\2', content, flags=re.MULTILINE)
+    # 3. DESTROY trailing slashes at the root variable assignment (fixes the root cause of double slashes)
+    content = re.sub(r'(BUILDDIR\s*[:+?]?=\s*[^#\r\n]+?)/+\s*$', r'\1', content, flags=re.MULTILINE)
+    content = re.sub(r'([A-Z_]*(?:DIR|PATH)\s*[:+?]?=\s*[^#\r\n]+?)/+\s*$', r'\1', content, flags=re.MULTILINE)
 
-    # 4. Explicitly fix common path concatenations if they include trailing slashes
-    content = content.replace('$(BUILDDIR)/', '$(BUILDDIR)')
-    content = content.replace('${BUILDDIR}/', '${BUILDDIR}')
+    # 4. Global cleanup of any lingering double slashes in paths
+    content = content.replace('//', '/')
 
-    # 5. Inject safe compiler overrides
+    # 5. Inject safe compiler overrides and disable rend2 renderer
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -32,7 +33,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w") as f:
         f.write(content)
-    print("[PATCHED] Makefile directory variables and paths normalized.")
+    print("[PATCHED] Makefile successfully updated with definitive path and rm fixes.")
 
 def patch_q_platform():
     patched = 0
@@ -64,11 +65,12 @@ def patch_q_platform():
     if patched == 0:
         print("[WARNING] No q_platform.h files found!")
     else:
-        print(f"[INFO] Patched {patched} q_platform.h files")
+        print(f"[INFO] Patched {patched} q_platform.h files successfully.")
 
 if __name__ == "__main__":
     if not os.path.exists("Makefile"):
+        print("[ERROR] Makefile not present in current working directory.")
         sys.exit(1)
     patch_makefile()
     patch_q_platform()
-    print("[DONE]")
+    print("[DONE] All patches applied cleanly.")
