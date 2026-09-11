@@ -8,7 +8,7 @@ def patch_makefile():
     with open(makefile, "r") as f:
         content = f.read()
     patch = """
-override CFLAGS += -fcommon -I/usr/include/SDL -DARCH_STRING=\\"aarch64\\" -DQ3_LITTLE_ENDIAN -D__aarch64__=1
+override CFLAGS += -fcommon -I/usr/include/SDL -DARCH_STRING=\\"aarch64\\" -D__aarch64__=1 -Wno-error
 override BUILD_RENDERER_REND2=0
 """
     content = patch + content
