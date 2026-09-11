@@ -14,7 +14,7 @@ def patch_makefile():
 
     # Prepend flags to suppress warnings entirely during C compilation
     patch = """
-override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1
+override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
 """
     content = patch + content
@@ -32,30 +32,29 @@ def patch_q_platform():
             path = os.path.join(root, file)
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            if "#ifndef __aarch64__" not in content:
-                content = "#ifndef __aarch64__\n#define __aarch64__ 1\n#endif\n" + content
             
-            old = '#else\n#error "Architecture not supported"'
-            new = (
-                '#elif defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n'
-                '#ifndef ARCH_STRING\n#define ARCH_STRING "aarch64"\n#endif\n'
-                '#ifndef Q3_LITTLE_ENDIAN\n#define Q3_LITTLE_ENDIAN\n#endif\n'
-                '#else\n#error "Architecture not supported"'
+            # Prepend explicit aarch64 overrides at the very top of q_platform.h
+            aarch64_override = (
+                "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
+                "#ifndef ARCH_STRING\n"
+                "#define ARCH_STRING \"aarch64\"\n"
+                "#endif\n"
+                "#ifndef Q3_LITTLE_ENDIAN\n"
+                "#define Q3_LITTLE_ENDIAN\n"
+                "#endif\n"
+                "#endif\n\n"
             )
-            if old in content:
-                content = content.replace(old, new)
-            else:
-                content = content.replace(
-                    '#error "Architecture not supported"',
-                    new
-                )
+            if "ARCH_STRING" not in content:
+                content = aarch64_override + content
+
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
             patched += 1
+            
     if patched == 0:
         print("[WARNING] No q_platform.h files found!")
     else:
-        print(f"[INFO] Patched {patched} files")
+        print(f"[INFO] Patched {patched} q_platform.h files")
 
 if __name__ == "__main__":
     if not os.path.exists("Makefile"):
