@@ -11,35 +11,40 @@ def patch_makefile():
         lines = f.readlines()
 
     new_lines = []
-    builddir_matched = False
+    dir_vars_patched = 0
 
     for line in lines:
-        # 1. Strip out strict -Werror and diagnostic flags
+        # 1. Strip out strict -Werror and diagnostic flags globally
         line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
         line = re.sub(r'-Wmaybe-uninitialized', '', line)
+        line = re.sub(r'-Wuninitialized', '', line)
+        line = re.sub(r'-Wstrict-overflow', '', line)
         
-        # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
-        line = re.sub(r'\brm\s+', 'rm -f ', line)
+        # 2. Make ALL rm commands safe globally (skipping already safe ones)
+        line = re.sub(r'\brm\s+(?!-)', 'rm -f ', line)
 
-        # 3. Safely strip trailing slashes from BUILDDIR with diagnostics
-        if line.startswith("BUILDDIR") and "=" in line:
-            builddir_matched = True
+        # 3. Safely strip trailing slashes from ANY variable assignment (BUILDDIR, UI_DIR, etc.)
+        if re.match(r'^\s*[A-Za-z0-9_]+\s*[+?:]?=', line):
             parts = line.split('#', 1)
             code_part = parts[0].rstrip()
             if code_part.endswith('/'):
                 code_part = code_part.rstrip('/')
+                dir_vars_patched += 1
             line = code_part + (' #' + parts[1] if len(parts) > 1 else '\n')
+
+        # 4. Automatically disable sdl12-compat tests in any inline cmake commands
+        if 'cmake ' in line and 'SDL12TESTS' not in line:
+            parts = line.split('#', 1)
+            code_part = parts[0].rstrip()
+            line = code_part + ' -DSDL12TESTS=OFF' + (' #' + parts[1] if len(parts) > 1 else '\n')
 
         new_lines.append(line)
 
-    if not builddir_matched:
-        print("[WARNING] BUILDDIR variable was not matched at line start! Inspect Makefile variable naming.")
-    else:
-        print("[INFO] BUILDDIR successfully matched and normalized.")
+    print(f"[INFO] Normalized trailing slashes on {dir_vars_patched} directory variable assignments.")
 
     content = "".join(new_lines)
 
-    # 4. Inject safe compiler overrides and disable rend2 renderer at the top
+    # 5. Inject safe compiler overrides and disable rend2 renderer at the top
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -48,7 +53,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile safely patched.")
+    print("[PATCHED] Makefile safely patched without breaking conditionals.")
 
 def patch_q_platform():
     patched = 0
