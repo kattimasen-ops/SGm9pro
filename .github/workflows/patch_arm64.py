@@ -7,19 +7,29 @@ def patch_makefile():
         print(f"[ERROR] {makefile} not found!")
         sys.exit(1)
         
-    with open(makefile, "r") as f:
-        content = f.read()
+    with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
 
-    # 1. Strip out strict -Werror and diagnostic flags
-    content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
-    content = re.sub(r'-Wmaybe-uninitialized', '', content)
+    new_lines = []
+    for line in lines:
+        # 1. Strip out strict -Werror and diagnostic flags
+        line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
+        line = re.sub(r'-Wmaybe-uninitialized', '', line)
+        
+        # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
+        line = re.sub(r'\brm\s+', 'rm -f ', line)
 
-    # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
-    content = re.sub(r'\brm\s+', 'rm -f ', content)
+        # 3. Target any directory/path variable assignment and strip trailing slashes from its value
+        if re.match(r'^[A-Z_]*(?:DIR|PATH|BUILDDIR)\s*[:+?]?=', line):
+            parts = line.split('#', 1)
+            val_part = parts[0].rstrip()
+            # Strip trailing slashes from the variable value
+            val_part = re.sub(r'/+\s*$', '', val_part)
+            line = val_part + (' #' + parts[1] if len(parts) > 1 else '\n')
 
-    # 3. DESTROY trailing slashes at the root variable assignment (fixes the root cause of double slashes)
-    content = re.sub(r'(BUILDDIR\s*[:+?]?=\s*[^#\r\n]+?)/+\s*$', r'\1', content, flags=re.MULTILINE)
-    content = re.sub(r'([A-Z_]*(?:DIR|PATH)\s*[:+?]?=\s*[^#\r\n]+?)/+\s*$', r'\1', content, flags=re.MULTILINE)
+        new_lines.append(line)
+
+    content = "".join(new_lines)
 
     # 4. Global cleanup of any lingering double slashes in paths
     content = content.replace('//', '/')
@@ -31,9 +41,9 @@ override BUILD_RENDERER_REND2=0
 """
     content = patch + content
 
-    with open(makefile, "w") as f:
+    with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile successfully updated with definitive path and rm fixes.")
+    print("[PATCHED] Makefile variable trailing slashes successfully stripped and paths normalized.")
 
 def patch_q_platform():
     patched = 0
