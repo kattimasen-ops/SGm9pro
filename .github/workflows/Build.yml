@@ -43,36 +43,30 @@ jobs:
                   sys.exit(1)
                   
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
-                  lines = f.readlines()
+                  content = f.read()
 
+              content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
+              content = re.sub(r'-Wmaybe-uninitialized', '', content)
+              content = re.sub(r'-Wuninitialized', '', content)
+              content = re.sub(r'-Wstrict-overflow', '', content)
+              
+              content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
+
+              lines = content.splitlines(keepends=True)
               new_lines = []
-
               for line in lines:
-                  line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
-                  line = re.sub(r'-Wmaybe-uninitialized', '', line)
-                  line = re.sub(r'-Wuninitialized', '', line)
-                  line = re.sub(r'-Wstrict-overflow', '', line)
-                  
-                  line = re.sub(r'\brm\s+(?!-)', 'rm -f ', line)
-
                   if 'cmake ' in line and 'SDL12TESTS' not in line:
                       parts = line.split('#', 1)
                       code_part = parts[0].rstrip()
                       line = code_part + ' -DSDL12TESTS=OFF' + (' #' + parts[1] if len(parts) > 1 else '\n')
-
                   new_lines.append(line)
-
               content = "".join(new_lines)
 
-              patch = """
-          override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
-          override BUILD_RENDERER_REND2=0
-          """
-              content = patch + content
+              content = content.replace('//ui/', '/ui/')
 
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile safely patched without breaking variable paths.")
+              print("[PATCHED] Makefile safely patched without corrupting line continuations.")
 
           def patch_q_platform():
               patched = 0
@@ -207,7 +201,8 @@ jobs:
             BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            BUILD_RENDERER_REND2=0 WERROR=0 CFLAGS="-w" \
+            BUILD_RENDERER_REND2=0 WERROR=0 \
+            CFLAGS="-w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"" \
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
