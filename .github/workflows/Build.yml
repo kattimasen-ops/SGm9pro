@@ -1,4 +1,4 @@
-name: Port Smokin' Guns for RK3326 (PortMaster) - MAXIMUM Performance Native Build
+name: Create final Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Native-SDL12-Max.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Native-SDL12.zip
   PORT_DIR: smokinguns
 
 jobs:
@@ -36,11 +36,6 @@ jobs:
           #!/usr/bin/env python3
           import os, sys, re, shutil
 
-          def sanitize_slashes(content):
-              content = re.sub(r'(?<=:)//+', '//', content)
-              content = re.sub(r'(?<!:)//+', '/', content)
-              return content
-
           def patch_makefile():
               makefile = "Makefile"
               if not os.path.exists(makefile):
@@ -48,6 +43,21 @@ jobs:
                   sys.exit(1)
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
+              if 'ARCH,aarch64' not in content:
+                  pattern = r'(\s*else ifeq \(\$\(ARCH\),s390x\)\s*\n\s*LIB=lib64\s*\n)'
+                  replacement = r'\1else ifeq ($(ARCH),aarch64)\n  LIB=lib64\n'
+                  content, count = re.subn(pattern, replacement, content)
+                  if count == 0:
+                      pattern2 = r'(\s*LIB=lib\s*\n)'
+                      content, count = re.subn(pattern2, r'ifeq ($(ARCH),aarch64)\n  LIB=lib64\nendif\n\1', content)
+                      if count == 0:
+                          print("[WARN] LIB=lib64 fuer aarch64 konnte nicht automatisch eingefuegt werden.")
+                      else:
+                          print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (Fallback).")
+                  else:
+                      print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
+              else:
+                  print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
               lines = content.splitlines(keepends=True)
               new_lines = []
               for line in lines:
@@ -62,16 +72,13 @@ jobs:
               if not re.search(r'ARCH_STRING\s*=', content):
                   content = re.sub(r'(ARCH\s*=\s*[^\n]*\n)', r'\1ARCH_STRING = aarch64\n', content, count=1)
               content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
-              if '-fno-plt' not in content:
-                  content = re.sub(r'(OPTIMIZE\s*=\s*[^\n]*)', r'\1 -fno-plt', content, count=1)
               content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
-              content = sanitize_slashes(content)
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt, Slashes bereinigt.")
+              print("[PATCHED] Makefile: LIB=lib64, renderergl2 deaktiviert, rm -f, python3, O3.")
 
           def rename_renderergl2_dir():
               renderergl2_dir = "code/renderergl2"
@@ -94,26 +101,28 @@ jobs:
               if re.search(r'ARCH_STRING\s+"aarch64"', content):
                   print("[INFO] q_platform.h bereits gepatcht.")
                   return
-              if '__aarch64__' in content and 'ARCH_STRING' in content:
-                  if re.search(r'__aarch64__.*?ARCH_STRING', content, re.DOTALL):
-                      print("[INFO] q_platform.h behandelt __aarch64__ bereits.")
-                      return
-              aarch64_override = (
-                  "/* [PATCHED] ARM64 ARCH_STRING Override */\n"
-                  "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
-                  "#ifdef ARCH_STRING\n"
-                  "#undef ARCH_STRING\n"
-                  "#endif\n"
-                  "#define ARCH_STRING \"aarch64\"\n"
-                  "#ifndef Q3_LITTLE_ENDIAN\n"
-                  "#define Q3_LITTLE_ENDIAN\n"
-                  "#endif\n"
-                  "#endif\n\n"
-              )
-              content = aarch64_override + content
+              pattern = r'(#elif defined __arm__\s*\n#define ARCH_STRING "arm"\s*\n)'
+              replacement = r'\1#elif defined __aarch64__\n#define ARCH_STRING "aarch64"\n'
+              content, count = re.subn(pattern, replacement, content)
+              if count > 0:
+                  print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert (offizieller Patch).")
+              else:
+                  aarch64_override = (
+                      "/* [PATCHED] ARM64 ARCH_STRING Override */\n"
+                      "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
+                      "#ifdef ARCH_STRING\n"
+                      "#undef ARCH_STRING\n"
+                      "#endif\n"
+                      "#define ARCH_STRING \"aarch64\"\n"
+                      "#ifndef Q3_LITTLE_ENDIAN\n"
+                      "#define Q3_LITTLE_ENDIAN\n"
+                      "#endif\n"
+                      "#endif\n\n"
+                  )
+                  content = aarch64_override + content
+                  print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert (Fallback).")
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert.")
 
           if __name__ == "__main__":
               patch_makefile()
@@ -131,6 +140,7 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
 
+          # Cortex-A35 Optimierung, LTO vermeiden (ARM64-Segfaults)
           export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=4 -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
@@ -210,7 +220,6 @@ jobs:
             --disable-pulseaudio \
             --disable-arts \
             --enable-arm-simd \
-            --enable-arm-neon \
             --enable-shared \
             --disable-static \
             CFLAGS="$OPTIMIZE" \
@@ -220,7 +229,7 @@ jobs:
 
           cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD/NEON):"
+          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD):"
           ls -la /work/out/libs.aarch64/
 
           # =====================================================================
@@ -234,10 +243,10 @@ jobs:
           python3 /work/patch_arm64.py
 
           echo "==> Alte Artefakte bereinigen..."
-          make clean || true
+          rm -rf build/release-linux-aarch64/ || true
 
           echo "==> Smokin' Guns kompilieren (OHNE renderergl2, NUR native Module)..."
-          make release -j1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
+          make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             BUILD_RENDERER_OPENGL2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
@@ -271,11 +280,23 @@ jobs:
           find "$BUILD_OUT" -name '*.so' -type f -print
           find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
 
+          # Modulnamen normalisieren (Architektur-Suffix entfernen)
+          cd /work/out/game
+          for mod in cgame qagame ui; do
+            for f in ${mod}*.so; do
+              if [ -f "$f" ] && [ "$f" != "${mod}.so" ]; then
+                mv "$f" "${mod}.so"
+                echo "[PROACTIVE] $f -> ${mod}.so umbenannt"
+              fi
+            done
+          done
+          cd /work
+
           echo "==> Finale Spiel-Ausgabe:"
           ls -la /work/out/game/
 
           for mod in cgame qagame ui; do
-            if ls /work/out/game/${mod}*.so 1>/dev/null 2>&1; then
+            if ls /work/out/game/${mod}.so 1>/dev/null 2>&1; then
               echo "  [OK] ${mod}.so gefunden"
             else
               echo "  [WARN] ${mod}.so NICHT gefunden!"
@@ -320,7 +341,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2 (ARM SIMD/NEON). No sdl12-compat, no QVM, no renderergl2. Cortex-A35 optimized.",
+              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2. No sdl12-compat, no QVM, no renderergl2. Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -389,7 +410,7 @@ jobs:
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
 
-          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
+          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0:${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
             +set com_maxfps 40 \
@@ -423,6 +444,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-Native-SDL12-Max
+          name: SmokinGuns-PortMaster-RK3326-Native-SDL12
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
