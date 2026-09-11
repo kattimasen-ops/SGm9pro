@@ -15,10 +15,15 @@ def patch_makefile():
     # 2. Make ALL rm commands safe by turning them into 'rm -f' globally
     content = re.sub(r'\brm\s+', 'rm -f ', content)
 
-    # 3. Clean up any double slashes in paths caused by variable concatenation
-    content = content.replace('//', '/')
+    # 3. Strip trailing slashes from directory variables to prevent double slashes (//)
+    content = re.sub(r'([A-Z_]*(?:DIR|PATH)\s*[:+?]?=\s*[^#\r\n]+?)/+\s*(#.*)?$', r'\1\2', content, flags=re.MULTILINE)
+    content = re.sub(r'(BUILDDIR\s*[:+?]?=\s*[^#\r\n]+?)/+\s*(#.*)?$', r'\1\2', content, flags=re.MULTILINE)
 
-    # 4. Inject safe compiler overrides
+    # 4. Explicitly fix common path concatenations if they include trailing slashes
+    content = content.replace('$(BUILDDIR)/', '$(BUILDDIR)')
+    content = content.replace('${BUILDDIR}/', '${BUILDDIR}')
+
+    # 5. Inject safe compiler overrides
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -27,7 +32,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w") as f:
         f.write(content)
-    print("[PATCHED] Makefile completely cleaned and fixed.")
+    print("[PATCHED] Makefile directory variables and paths normalized.")
 
 def patch_q_platform():
     patched = 0
@@ -56,10 +61,10 @@ def patch_q_platform():
                 f.write(content)
             patched += 1
             
-        if patched == 0:
-            print("[WARNING] No q_platform.h files found!")
-        else:
-            print(f"[INFO] Patched {patched} q_platform.h files")
+    if patched == 0:
+        print("[WARNING] No q_platform.h files found!")
+    else:
+        print(f"[INFO] Patched {patched} q_platform.h files")
 
 if __name__ == "__main__":
     if not os.path.exists("Makefile"):
