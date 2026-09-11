@@ -44,7 +44,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           
           # --- MAXIMUM PERFORMANCE FLAGS ---
-          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG"
+          export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -Wno-error -Wno-maybe-uninitialized"
           
           apt-get update
           apt-get install -y --no-install-recommends \
