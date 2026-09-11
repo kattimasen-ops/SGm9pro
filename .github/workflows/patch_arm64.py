@@ -11,6 +11,8 @@ def patch_makefile():
         lines = f.readlines()
 
     new_lines = []
+    builddir_matched = False
+
     for line in lines:
         # 1. Strip out strict -Werror and diagnostic flags
         line = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', line)
@@ -19,23 +21,25 @@ def patch_makefile():
         # 2. Make ALL rm commands safe globally by turning them into 'rm -f'
         line = re.sub(r'\brm\s+', 'rm -f ', line)
 
-        # 3. Safely strip trailing slashes from BUILDDIR without touching conditionals/endif
+        # 3. Safely strip trailing slashes from BUILDDIR with diagnostics
         if line.startswith("BUILDDIR") and "=" in line:
+            builddir_matched = True
             parts = line.split('#', 1)
             code_part = parts[0].rstrip()
             if code_part.endswith('/'):
                 code_part = code_part.rstrip('/')
             line = code_part + (' #' + parts[1] if len(parts) > 1 else '\n')
 
-        # 4. Automatically disable sdl12-compat tests in any cmake command
-        if 'cmake' in line and 'SDL12TESTS' not in line:
-            line = line.rstrip() + ' -DSDL12TESTS=OFF\n'
-
         new_lines.append(line)
+
+    if not builddir_matched:
+        print("[WARNING] BUILDDIR variable was not matched at line start! Inspect Makefile variable naming.")
+    else:
+        print("[INFO] BUILDDIR successfully matched and normalized.")
 
     content = "".join(new_lines)
 
-    # 5. Inject safe compiler overrides and disable rend2 renderer at the top
+    # 4. Inject safe compiler overrides and disable rend2 renderer at the top
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -44,7 +48,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile safely patched without breaking conditionals.")
+    print("[PATCHED] Makefile safely patched.")
 
 def patch_q_platform():
     patched = 0
