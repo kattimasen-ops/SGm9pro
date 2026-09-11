@@ -6,7 +6,7 @@ def patch_makefile():
     if not os.path.exists(makefile):
         print(f"[ERROR] {makefile} not found!")
         sys.exit(1)
-        
+
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
@@ -15,40 +15,39 @@ def patch_makefile():
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
     content = re.sub(r'-Wuninitialized', '', content)
     content = re.sub(r'-Wstrict-overflow', '', content)
-    
+
     # 2. Make rm commands safe
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
-    # 3. Disable sdl12-compat tests in inline cmake commands
-    lines = content.splitlines(keepends=True)
-    new_lines = []
-    for line in lines:
-        if 'cmake ' in line and 'SDL12TESTS' not in line:
-            parts = line.split('#', 1)
-            code_part = parts[0].rstrip()
-            line = code_part + ' -DSDL12TESTS=OFF' + (' #' + parts[1] if len(parts) > 1 else '\n')
-        new_lines.append(line)
-    content = "".join(new_lines)
-
-    # 4. Fix double-slash path expansion bugs in Makefile rules (e.g., //ui/ -> /ui/)
-    content = content.replace('//ui/', '/ui/').replace('//game/', '/game/').replace('//cgame/', '/cgame/')
+    # 3. Fix double-slash path expansion bugs (targeted)
+    content = content.replace('//ui/', '/ui/')
+    content = content.replace('//game/', '/game/')
+    content = content.replace('//cgame/', '/cgame/')
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile path expansions and warning flags cleaned.")
+    print("[PATCHED] Makefile warning flags cleaned and paths sanitized.")
 
 def patch_q_platform():
     path = "code/qcommon/q_platform.h"
     if not os.path.exists(path):
         print(f"[ERROR] {path} not found!")
         sys.exit(1)
-        
+
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
-    
-    if 'ARCH_STRING "aarch64"' in content:
-        print("[INFO] q_platform.h already patched.")
+
+    # Check if aarch64 ARCH_STRING is already defined anywhere
+    if re.search(r'ARCH_STRING\s+"aarch64"', content):
+        print("[INFO] q_platform.h already has ARCH_STRING aarch64 defined.")
         return
+
+    # Also check if the aarch64 preprocessor block already exists
+    if '__aarch64__' in content and 'ARCH_STRING' in content:
+        # Check if it's in the ARCH_STRING chain
+        if re.search(r'__aarch64__.*?ARCH_STRING', content, re.DOTALL):
+            print("[INFO] q_platform.h already handles __aarch64__ for ARCH_STRING.")
+            return
 
     aarch64_override = (
         "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
@@ -61,14 +60,31 @@ def patch_q_platform():
         "#endif\n"
         "#endif\n\n"
     )
-    
+
     content = aarch64_override + content
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Successfully injected ARCH_STRING override into code/qcommon/q_platform.h.")
+    print("[PATCHED] Injected ARCH_STRING override into code/qcommon/q_platform.h.")
+
+def patch_standalone_config():
+    """Ensure the standalone config uses the correct game directory name."""
+    path = "code/qcommon/q_shared.h"
+    if not os.path.exists(path):
+        print(f"[WARN] {path} not found, skipping standalone config patch.")
+        return
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    # Ensure PRODUCT_NAME is defined for standalone builds
+    if 'PRODUCT_NAME' not in content:
+        print("[WARN] PRODUCT_NAME not found in q_shared.h - standalone may use defaults.")
+    else:
+        print("[INFO] q_shared.h already has PRODUCT_NAME defined.")
 
 if __name__ == "__main__":
     patch_makefile()
     patch_q_platform()
+    patch_standalone_config()
     print("[DONE] All local source patches applied successfully.")
