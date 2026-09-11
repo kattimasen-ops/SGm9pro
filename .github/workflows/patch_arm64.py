@@ -8,14 +8,17 @@ def patch_makefile():
     with open(makefile, "r") as f:
         content = f.read()
 
-    # Strip out strict -Werror and diagnostic flags across the Makefile
+    # 1. Strip out strict -Werror and diagnostic flags
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
 
-    # Fix clean/rm commands that lack -f when rend2 files are absent
-    content = content.replace("rm build/", "rm -f build/")
+    # 2. Make ALL rm commands safe by turning them into 'rm -f' globally
+    content = re.sub(r'\brm\s+', 'rm -f ', content)
 
-    # Prepend flags to suppress warnings entirely during C compilation
+    # 3. Clean up any double slashes in paths caused by variable concatenation
+    content = content.replace('//', '/')
+
+    # 4. Inject safe compiler overrides
     patch = """
 override CFLAGS += -w -fcommon -I/usr/include/SDL -D__aarch64__=1 -DARCH_STRING=\\\"aarch64\\\"
 override BUILD_RENDERER_REND2=0
@@ -24,7 +27,7 @@ override BUILD_RENDERER_REND2=0
 
     with open(makefile, "w") as f:
         f.write(content)
-    print("[PATCHED] Makefile")
+    print("[PATCHED] Makefile completely cleaned and fixed.")
 
 def patch_q_platform():
     patched = 0
@@ -36,7 +39,6 @@ def patch_q_platform():
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             
-            # Prepend explicit aarch64 overrides at the very top of q_platform.h
             aarch64_override = (
                 "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
                 "#ifndef ARCH_STRING\n"
@@ -54,10 +56,10 @@ def patch_q_platform():
                 f.write(content)
             patched += 1
             
-    if patched == 0:
-        print("[WARNING] No q_platform.h files found!")
-    else:
-        print(f"[INFO] Patched {patched} q_platform.h files")
+        if patched == 0:
+            print("[WARNING] No q_platform.h files found!")
+        else:
+            print(f"[INFO] Patched {patched} q_platform.h files")
 
 if __name__ == "__main__":
     if not os.path.exists("Makefile"):
