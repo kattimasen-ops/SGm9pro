@@ -1,4 +1,4 @@
-name: meth Smokin' Guns for RK3326 (PortMaster) - Fully Optimized
+name: Construct Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 350
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,46 +41,84 @@ jobs:
               if not os.path.exists(makefile):
                   print(f"[ERROR] {makefile} not found!")
                   sys.exit(1)
-                  
+
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
 
-              content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
-              content = re.sub(r'-Wmaybe-uninitialized', '', content)
-              content = re.sub(r'-Wuninitialized', '', content)
-              content = re.sub(r'-Wstrict-overflow', '', content)
-              content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
+              # --- FIX 1: Remove renderergl2 from build entirely ---
+              content = re.sub(
+                  r'RENDERER_GL2\s*=\s*[^\n]*\n',
+                  'RENDERER_GL2 =\n',
+                  content
+              )
 
               lines = content.splitlines(keepends=True)
               new_lines = []
               for line in lines:
-                  if 'cmake ' in line and 'SDL12TESTS' not in line:
-                      parts = line.split('#', 1)
-                      code_part = parts[0].rstrip()
-                      line = code_part + ' -DSDL12TESTS=OFF' + (' #' + parts[1] if len(parts) > 1 else '\n')
+                  if 'renderergl2' in line and ('BUILD_' in line or 'TARGET' in line or 'RENDERER' in line):
+                      new_lines.append('# [PATCHED] Disabled renderergl2: ' + line)
+                      continue
                   new_lines.append(line)
               content = "".join(new_lines)
 
-              content = content.replace('//ui/', '/ui/').replace('//game/', '/game/').replace('//cgame/', '/cgame/')
+              content = re.sub(
+                  r'^\$\(B\)/renderergl2/[^\n]*\n',
+                  '',
+                  content,
+                  flags=re.MULTILINE
+              )
+
+              # --- FIX 2: Strip strict warning/error flags ---
+              content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
+              content = re.sub(r'-Wmaybe-uninitialized', '', content)
+              content = re.sub(r'-Wuninitialized', '', content)
+              content = re.sub(r'-Wstrict-overflow', '', content)
+
+              # --- FIX 3: Make ALL rm commands safe ---
+              content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
+
+              # --- FIX 4: Fix double-slash path bugs ---
+              content = content.replace('//ui/', '/ui/')
+              content = content.replace('//game/', '/game/')
+              content = content.replace('//cgame/', '/cgame/')
+
+              # --- FIX 5: Ensure python3 is used ---
+              content = content.replace('python ', 'python3 ')
+              content = content.replace('python2 ', 'python3 ')
+
+              # --- FIX 6: ARCH_STRING consistency ---
+              if not re.search(r'ARCH_STRING\s*=', content):
+                  content = re.sub(
+                      r'(ARCH\s*=\s*[^\n]*\n)',
+                      r'\1ARCH_STRING = aarch64\n',
+                      content,
+                      count=1
+                  )
 
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile path expansions and warning flags cleaned.")
+              print("[PATCHED] Makefile: renderergl2 disabled, rm -f, python3, path fixes.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
               if not os.path.exists(path):
                   print(f"[ERROR] {path} not found!")
                   sys.exit(1)
-                  
+
               with open(path, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
-              
-              if 'ARCH_STRING "aarch64"' in content:
-                  print("[INFO] q_platform.h already patched.")
+
+              if re.search(r'ARCH_STRING\s+"aarch64"', content):
+                  print("[INFO] q_platform.h already has ARCH_STRING aarch64.")
                   return
 
+              if '__aarch64__' in content and 'ARCH_STRING' in content:
+                  if re.search(r'__aarch64__.*?ARCH_STRING', content, re.DOTALL):
+                      print("[INFO] q_platform.h already handles __aarch64__ for ARCH_STRING.")
+                      return
+
               aarch64_override = (
+                  "/* [PATCHED] ARM64 ARCH_STRING override */\n"
                   "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
                   "#ifdef ARCH_STRING\n"
                   "#undef ARCH_STRING\n"
@@ -91,16 +129,17 @@ jobs:
                   "#endif\n"
                   "#endif\n\n"
               )
+
               content = aarch64_override + content
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Successfully injected ARCH_STRING override into code/qcommon/q_platform.h.")
+              print("[PATCHED] Injected ARCH_STRING 'aarch64' into q_platform.h.")
 
           if __name__ == "__main__":
               patch_makefile()
               patch_q_platform()
-              print("[DONE] All local source patches applied successfully.")
+              print("[DONE] All patches applied.")
           PY_EOF
 
       - name: Write in-container build script
@@ -111,13 +150,13 @@ jobs:
           set -euo pipefail
           set -x
           export DEBIAN_FRONTEND=noninteractive
-          
+
           export OPTIMIZE="-O3 -march=armv8-a -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -DNDEBUG -w"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
-          
+
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential git pkg-config ca-certificates wget file zip python3 xxd ccache \
+            build-essential git pkg-config ca-certificates wget file zip python3 ccache \
             libsdl1.2-dev libsdl2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
@@ -130,7 +169,7 @@ jobs:
           export CC="ccache gcc"
           export CXX="ccache g++"
 
-          # CMake installation
+          # --- CMake installation ---
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
@@ -147,7 +186,7 @@ jobs:
             -DNOX11=ON -DGLX_STUBS=ON -DEGL_WRAPPER=ON -DGBM=ON \
             -DSTATICLIB=OFF -DDEFAULT_ES=2 -DNOERROR=ON
           make -j"$(nproc)"
-          
+
           cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
           cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
@@ -157,8 +196,13 @@ jobs:
             git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
           fi
           cd sdl12-compat
-          sed -i 's/SDL_HINT_VIDEODRIVER/"SDL_VIDEODRIVER"/g' src/SDL12_compat.c || true
-          sed -i 's/SDL_HINT_AUDIODRIVER/"SDL_AUDIODRIVER"/g' src/SDL12_compat.c || true
+          # Conditional SDL_HINT fixes (only if needed)
+          if grep -q 'SDL_HINT_VIDEODRIVER' src/SDL12_compat.c 2>/dev/null; then
+            sed -i 's/SDL_HINT_VIDEODRIVER/"SDL_VIDEODRIVER"/g' src/SDL12_compat.c || true
+          fi
+          if grep -q 'SDL_HINT_AUDIODRIVER' src/SDL12_compat.c 2>/dev/null; then
+            sed -i 's/SDL_HINT_AUDIODRIVER/"SDL_AUDIODRIVER"/g' src/SDL12_compat.c || true
+          fi
 
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
@@ -167,7 +211,7 @@ jobs:
             -DCMAKE_C_FLAGS="$OPTIMIZE" \
             -DSDL12TESTS=OFF
           make -j"$(nproc)"
-          
+
           cp "$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
           # --- Build Smokin' Guns ---
@@ -181,34 +225,54 @@ jobs:
           echo "==> Cleaning stale artifacts..."
           make clean || true
 
-          echo "==> Compiling Smokin' Guns binary and modules sequentially (-j1 to avoid race conditions)..."
+          echo "==> Compiling Smokin' Guns (NO renderergl2, native modules only)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
-            BUILD_STANDALONE=1 BUILD_GAME_QVM=1 BUILD_GAME_SO=1 BUILD_SERVER=0 \
+            BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            BUILD_RENDERER_REND2=0 WERROR=0 \
-            CFLAGS="-w -fcommon -I/usr/include/SDL -D__aarch64__=1" \
+            WERROR=0 \
+            CFLAGS="-w -fcommon -I/usr/include/SDL" \
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          cp "$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' -print -quit)" /work/out/game/smokinguns.aarch64
-          chmod +x /work/out/game/smokinguns.aarch64
-          find "$BUILD_OUT" -name '*.so' -exec cp {} /work/out/game/ \; || true
+          echo "==> Build output: $BUILD_OUT"
 
-          # Pack QVM game logic into z_vm.pk3
-          echo "==> Packing QVM files..."
-          QVM_FILES="$(find "$BUILD_OUT" -name '*.qvm' -type f)"
-          if [ -n "$QVM_FILES" ]; then
-            rm -rf /tmp/vm_pack
-            mkdir -p /tmp/vm_pack/vm
-            for f in $QVM_FILES; do
-              cp "$f" "/tmp/vm_pack/vm/$(basename "$f")"
-            done
-            ( cd /tmp/vm_pack && zip -r /work/out/game/z_vm.pk3 . )
-          else
-            echo "ERROR: No QVM files found!" >&2
+          if [ -z "$BUILD_OUT" ] || [ ! -d "$BUILD_OUT" ]; then
+            echo "[ERROR] Build output directory not found!"
+            find /work/src/SmokinGuns/build -maxdepth 2 -type d 2>/dev/null || true
             exit 1
           fi
+
+          echo "==> Contents of BUILD_OUT:"
+          ls -la "$BUILD_OUT"
+
+          # Auto-detect the engine executable
+          ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
+          if [ -z "$ENGINE_BIN" ]; then
+            echo "[ERROR] No engine executable found in $BUILD_OUT"
+            exit 1
+          fi
+          echo "==> Detected engine binary: $ENGINE_BIN"
+          cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
+          chmod +x /work/out/game/smokinguns.aarch64
+
+          # Copy native .so modules (cgame, qagame, ui)
+          echo "==> Locating native modules..."
+          find "$BUILD_OUT" -name '*.so' -type f -print
+          find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
+
+          echo "==> Final game output:"
+          ls -la /work/out/game/
+
+          for mod in cgame qagame ui; do
+            if ls /work/out/game/${mod}*.so 1>/dev/null 2>&1; then
+              echo "  [OK] ${mod}.so found"
+            else
+              echo "  [WARN] ${mod}.so NOT found!"
+            fi
+          done
+
+          echo "==> Build complete!"
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
@@ -224,58 +288,34 @@ jobs:
           mkdir -p "$PKG/${PORT_DIR}/libs.aarch64"
           mkdir -p "$PKG/${PORT_DIR}/${PORT_DIR}"
 
+          # Engine binary
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
-          find work/out/game -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; || true
-          find work/out/game -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \; || true
 
-          cp work/out/game/z_vm.pk3 "$PKG/${PORT_DIR}/${PORT_DIR}/z_vm.pk3"
+          # Native .so modules - placed in the game directory
+          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \; 2>/dev/null || true
+
+          # Also copy .so files to the main dir as fallback
+          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; 2>/dev/null || true
+
+          # Runtime libraries
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
-          cat > "$PKG/${PORT_DIR}/smokinguns.gptk" <<'GPTK_EOF'
-          [ANALOG1]
-          UP = W
-          DOWN = S
-          LEFT = A
-          RIGHT = D
-
-          [ANALOG2]
-          UP = mouse_move_up
-          DOWN = mouse_move_down
-          LEFT = mouse_move_left
-          RIGHT = mouse_move_right
-
-          [BUTTONS]
-          A = mouse_left
-          B = mouse_right
-          X = SPACE
-          Y = R
-          L1 = TAB
-          R1 = mouse_middle
-          L2 = Q
-          R2 = E
-          START = ESCAPE
-          SELECT = F1
-          L3 = LEFTSHIFT
-          R3 = C
-          UP = UP
-          DOWN = DOWN
-          LEFT = LEFT
-          RIGHT = RIGHT
-          GPTK_EOF
+          echo "=== Package contents ==="
+          find "$PKG" -type f | sort
 
           cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
           {
-            "version": 2,
+            "version": 3,
             "name": "Smokin Guns.sh",
             "items": ["Smokin Guns.sh"],
             "items_opt": [],
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Ultra-optimized LTO Smokin' Guns port with GL4ES batching for RK3326.",
+              "desc": "Native ARM64 build with GL4ES and sdl12-compat. No QVM, no renderergl2.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -333,8 +373,9 @@ jobs:
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
-            +set com_maxfps 60 \
+            +set com_maxfps 40 \
             +set net_enabled 0 \
+            +set sv_pure 0 \
             +set vm_cgame 0 \
             +set vm_game 0 \
             +set vm_ui 0 \
