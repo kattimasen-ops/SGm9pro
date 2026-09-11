@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert)
+ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert) - MAXIMUM PERFORMANCE
 - Entfernt renderergl2 (nicht ARM64-kompatibel)
 - Erzwingt ARCH_STRING "aarch64"
 - Macht rm-Befehle safe
 - Korrigiert Pfad-Expansion
 - Stellt sicher, dass python3 verwendet wird
+- Erzwingt -O3 und -fno-plt
 """
 
 import os
@@ -63,9 +64,21 @@ def patch_makefile():
             count=1
         )
 
+    # --- FIX 7: -O2 durch -O3 ersetzen ---
+    content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
+
+    # --- FIX 8: -fno-plt hinzufuegen, falls nicht vorhanden ---
+    if '-fno-plt' not in content:
+        content = re.sub(
+            r'(OPTIMIZE\s*=\s*[^\n]*)',
+            r'\1 -fno-plt',
+            content,
+            count=1
+        )
+
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, Pfad-Fixes.")
+    print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3, O3, fno-plt.")
 
 
 def patch_q_platform():
@@ -106,23 +119,7 @@ def patch_q_platform():
     print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert.")
 
 
-def patch_rend2_references():
-    """Entfernt rend2-Referenzen aus Code-Dateien, die auf ARM64 nicht kompilieren."""
-    files_to_patch = [
-        "code/client/cl_main.c",
-        "code/client/cl_ui.c",
-    ]
-    for filepath in files_to_patch:
-        if not os.path.exists(filepath):
-            continue
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-        # Keine Aenderung noetig, falls renderergl2 bereits deaktiviert
-    print("[INFO] rend2-Referenzen geprueft.")
-
-
 if __name__ == "__main__":
     patch_makefile()
     patch_q_platform()
-    patch_rend2_references()
     print("[DONE] Alle Patches erfolgreich angewendet.")
