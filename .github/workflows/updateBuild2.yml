@@ -1,4 +1,4 @@
-name: Erstelle Smokin' Guns for RK3326 (PortMaster) - Fully Optimized Native Build
+name: heroin Smokin' Guns for RK3326 (PortMaster) - Native Build
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 350
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,7 +57,7 @@ jobs:
 
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile warning flags cleaned and paths sanitized.")
+              print("[PATCHED] Makefile cleaned.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
@@ -69,13 +69,8 @@ jobs:
                   content = f.read()
 
               if re.search(r'ARCH_STRING\s+"aarch64"', content):
-                  print("[INFO] q_platform.h already has ARCH_STRING aarch64 defined.")
+                  print("[INFO] q_platform.h already patched.")
                   return
-
-              if '__aarch64__' in content and 'ARCH_STRING' in content:
-                  if re.search(r'__aarch64__.*?ARCH_STRING', content, re.DOTALL):
-                      print("[INFO] q_platform.h already handles __aarch64__ for ARCH_STRING.")
-                      return
 
               aarch64_override = (
                   "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
@@ -88,17 +83,16 @@ jobs:
                   "#endif\n"
                   "#endif\n\n"
               )
-
               content = aarch64_override + content
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Injected ARCH_STRING override into code/qcommon/q_platform.h.")
+              print("[PATCHED] Injected ARCH_STRING override.")
 
           if __name__ == "__main__":
               patch_makefile()
               patch_q_platform()
-              print("[DONE] All local source patches applied successfully.")
+              print("[DONE] Patches applied.")
           PY_EOF
 
       - name: Write in-container build script
@@ -115,8 +109,8 @@ jobs:
 
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential git pkg-config ca-certificates wget file zip python3 xxd ccache \
-            libsdl2-dev \
+            build-essential git pkg-config ca-certificates wget file zip python3 ccache \
+            libsdl1.2-dev libsdl2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
@@ -128,16 +122,15 @@ jobs:
           export CC="ccache gcc"
           export CXX="ccache g++"
 
-          # CMake installation
           CMAKE_VERSION=3.28.3
           wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
           mkdir -p /opt/cmake
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
 
-          # --- Build GL4ES ---
+          # --- GL4ES ---
           cd /work/src
-          if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
+          [ -d gl4es ] || git clone --depth=1 https://github.com/ptitSeb/gl4es.git
           cd gl4es
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
@@ -149,20 +142,10 @@ jobs:
           cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
           cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
-          # --- Build sdl12-compat ---
+          # --- sdl12-compat ---
           cd /work/src
-          if [ ! -d sdl12-compat ]; then
-            git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
-          fi
+          [ -d sdl12-compat ] || git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
           cd sdl12-compat
-          # Fix SDL_HINT_VIDEODRIVER for older SDL2 versions (only if needed)
-          if grep -q 'SDL_HINT_VIDEODRIVER' src/SDL12_compat.c 2>/dev/null; then
-            sed -i 's/SDL_HINT_VIDEODRIVER/"SDL_VIDEODRIVER"/g' src/SDL12_compat.c || true
-          fi
-          if grep -q 'SDL_HINT_AUDIODRIVER' src/SDL12_compat.c 2>/dev/null; then
-            sed -i 's/SDL_HINT_AUDIODRIVER/"SDL_AUDIODRIVER"/g' src/SDL12_compat.c || true
-          fi
-
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
@@ -173,50 +156,52 @@ jobs:
 
           cp "$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          # --- Build Smokin' Guns ---
+          # --- Smokin' Guns ---
           cd /work/src
-          if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
+          [ -d SmokinGuns ] || git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
           cd SmokinGuns
 
-          echo "==> Running patch script..."
           python3 /work/patch_arm64.py
 
-          echo "==> Cleaning stale artifacts..."
           make clean || true
 
-          echo "==> Compiling Smokin' Guns binary and NATIVE modules (no QVM)..."
+          echo "==> Building engine + native modules..."
           make release -j1 PLATFORM=linux ARCH=aarch64 CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
-            CFLAGS="-w -fcommon -I/usr/include/SDL -D__aarch64__=1" \
+            CFLAGS="-w -fcommon -I/usr/include/SDL" \
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          echo "==> Build output directory: $BUILD_OUT"
+          echo "==> Build output: $BUILD_OUT"
+          echo "==> Contents of BUILD_OUT:"
+          ls -la "$BUILD_OUT"
 
-          # Copy the engine binary
-          cp "$BUILD_OUT/smokinguns.aarch64" /work/out/game/smokinguns.aarch64
+          # Auto-detect the engine executable
+          ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
+          if [ -z "$ENGINE_BIN" ]; then
+            echo "[ERROR] No engine executable found in $BUILD_OUT"
+            exit 1
+          fi
+          echo "==> Detected engine binary: $ENGINE_BIN"
+          cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          # Copy NATIVE .so modules (cgame, qagame, ui) from the game directory
-          GAMEDIR="$BUILD_OUT/smokinguns"
-          if [ -d "$GAMEDIR" ]; then
-            cp "$GAMEDIR"/*.so /work/out/game/ 2>/dev/null || true
-            echo "==> Native modules copied:"
-            ls -la /work/out/game/*.so 2>/dev/null || echo "  (no .so files found)"
-          else
-            echo "==> Searching for .so files..."
-            find "$BUILD_OUT" -name '*.so' -exec cp {} /work/out/game/ \;
-          fi
+          # Native .so modules
+          echo "==> Locating native modules..."
+          find "$BUILD_OUT" -name '*.so' -type f -print
+          find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
 
-          # Verify we have the expected modules
+          echo "==> Final game output:"
+          ls -la /work/out/game/
+
           for mod in cgame qagame ui; do
             if ls /work/out/game/${mod}*.so 1>/dev/null 2>&1; then
-              echo "  [OK] ${mod}.so found"
+              echo "  [OK] ${mod}.so"
             else
-              echo "  [WARN] ${mod}.so NOT found!"
+              echo "  [WARN] ${mod}.so missing"
             fi
           done
           BUILD_SCRIPT_EOF
@@ -234,22 +219,16 @@ jobs:
           mkdir -p "$PKG/${PORT_DIR}/libs.aarch64"
           mkdir -p "$PKG/${PORT_DIR}/${PORT_DIR}"
 
-          # Engine binary
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
 
-          # Native game modules (.so files) - placed in BOTH locations for safety
-          # The engine searches fs_basepath/fs_game/ for modules
-          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; 2>/dev/null || true
-          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \; 2>/dev/null || true
+          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \;
 
-          # Runtime libraries
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
-          # Verify .so files are present
-          echo "=== Package contents ==="
+          echo "=== Package ==="
           find "$PKG" -type f | sort
 
           cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
@@ -261,7 +240,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and sdl12-compat. No QVM - pure native performance.",
+              "desc": "Native ARM64 build with GL4ES and sdl12-compat. No QVM.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -297,7 +276,6 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          # Performance tuning
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
 
           export LIBGL_ES=2
