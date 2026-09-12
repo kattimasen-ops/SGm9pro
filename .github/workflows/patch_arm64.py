@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
 """
 ARM64 Build-Patch fuer Smokin' Guns (ioquake3-basiert)
+Verwendet Makefile.local, um MOUNT_DIR und Q3UIDIR zu setzen.
 Basiert auf dem offiziellen ioquake3-Patch von Martin Michlmayr (Debian)
-https://github.com/ioquake/ioq3/commit/ebb69f699cd1392cbe7a865f9f51dbbecdd99b59
 """
 
 import os
 import sys
 import re
 import shutil
+
+
+def create_makefile_local():
+    """Erstellt Makefile.local mit den korrekten Werten fuer MOUNT_DIR und Q3UIDIR."""
+    makefile_local = "Makefile.local"
+    content = """# [PATCHED] ARM64 Build-Konfiguration
+# Diese Datei wird von der Makefile automatisch geladen (-include Makefile.local)
+# und setzt die Variablen VOR allen anderen Zuweisungen.
+
+MOUNT_DIR := code
+Q3UIDIR := $(MOUNT_DIR)/ui
+ARCH := aarch64
+COMPILE_ARCH := aarch64
+"""
+    with open(makefile_local, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[PATCHED] Makefile.local erstellt (MOUNT_DIR, Q3UIDIR, ARCH, COMPILE_ARCH).")
 
 
 def patch_makefile():
@@ -20,40 +37,7 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 0: MOUNT_DIR unbedingt auf code setzen (nicht ifndef) ---
-    # Die Makefile definiert MOUNT_DIR nur, wenn es nicht definiert ist.
-    # In der Docker-Umgebung ist MOUNT_DIR als leere Variable definiert,
-    # wodurch ifndef fehlschlaegt und MOUNT_DIR leer bleibt.
-    # Wir ersetzen den gesamten ifndef-Block durch eine unbedingte Zuweisung.
-    content = content.replace(
-        'ifndef MOUNT_DIR\nMOUNT_DIR=code\nendif',
-        'MOUNT_DIR:=code'
-    )
-    print("[PATCHED] MOUNT_DIR:=code (unbedingt, ueberschreibt leere Umgebungsvariable).")
-
-    # --- FIX 1: Q3UIDIR direkt auf $(MOUNT_DIR)/ui setzen ---
-    # Die Makefile hat eine ifndef/else-Verzweigung fuer Q3UIDIR.
-    # Wir umgehen diese Verzweigung komplett.
-    old_q3uidir = (
-        'ifndef USE_MP_UIDIR\n'
-        'Q3UIDIR=$(MOUNT_DIR)/q3_ui\n'
-        'else\n'
-        'Q3UIDIR=$(UIDIR)\n'
-        'endif'
-    )
-    if old_q3uidir in content:
-        content = content.replace(old_q3uidir, 'Q3UIDIR=$(MOUNT_DIR)/ui')
-        print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt.")
-    else:
-        # Fallback: Suche nach der einzeiligen Version
-        old_q3uidir_one = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
-        if old_q3uidir_one in content:
-            content = content.replace(old_q3uidir_one, 'Q3UIDIR=$(MOUNT_DIR)/ui')
-            print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt (einzeilig).")
-        else:
-            print("[INFO] Q3UIDIR-Verzweigung nicht gefunden, keine Aenderung noetig.")
-
-    # --- FIX 2: LIB=lib64 fuer ARCH=aarch64 (offizieller ioquake3-Patch) ---
+    # --- FIX 1: LIB=lib64 fuer ARCH=aarch64 (offizieller ioquake3-Patch) ---
     if 'ARCH,aarch64' not in content:
         old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
         new_lib = (
@@ -69,7 +53,7 @@ def patch_makefile():
     else:
         print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
 
-    # --- FIX 3: renderergl2 aus der TARGETS-Variable entfernen ---
+    # --- FIX 2: renderergl2 aus der TARGETS-Variable entfernen ---
     lines = content.splitlines(keepends=True)
     new_lines = []
     for line in lines:
@@ -79,26 +63,14 @@ def patch_makefile():
         new_lines.append(line)
     content = "".join(new_lines)
 
-    # --- FIX 4: rm-Befehle safe machen ---
+    # --- FIX 3: rm-Befehle safe machen ---
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
-    # --- FIX 5: python3 erzwingen ---
+    # --- FIX 4: python3 erzwingen ---
     content = content.replace('python ', 'python3 ')
     content = content.replace('python2 ', 'python3 ')
 
-    # --- FIX 6: ARCH_STRING-Konsistenz ---
-    if not re.search(r'ARCH_STRING\s*=', content):
-        content = re.sub(
-            r'(ARCH\s*=\s*[^\n]*\n)',
-            r'\1ARCH_STRING = aarch64\n',
-            content,
-            count=1
-        )
-
-    # --- FIX 7: -O2 durch -O3 ersetzen ---
-    content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
-
-    # --- FIX 8: Strikte Warn-Flags entfernen ---
+    # --- FIX 5: Strikte Warn-Flags entfernen ---
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
     content = re.sub(r'-Wuninitialized', '', content)
@@ -106,7 +78,7 @@ def patch_makefile():
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: MOUNT_DIR, Q3UIDIR, LIB=lib64, renderergl2 deaktiviert.")
+    print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3.")
 
 
 def rename_renderergl2_dir():
@@ -163,6 +135,7 @@ def patch_q_platform():
 
 
 if __name__ == "__main__":
+    create_makefile_local()
     patch_makefile()
     rename_renderergl2_dir()
     patch_q_platform()
