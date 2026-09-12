@@ -1,4 +1,4 @@
-name: create Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
+name: Create Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
 
 on:
   workflow_dispatch:
@@ -44,19 +44,35 @@ jobs:
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
               # FIX 0: MOUNT_DIR unbedingt auf code setzen
-              content = content.replace('MOUNT_DIR=code', 'MOUNT_DIR:=code')
-              print("[PATCHED] MOUNT_DIR:=code gesetzt.")
-              # FIX 1: Q3UIDIR explizit setzen
-              old_q3uidir = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
+              content = content.replace(
+                  'ifndef MOUNT_DIR\nMOUNT_DIR=code\nendif',
+                  'MOUNT_DIR:=code'
+              )
+              print("[PATCHED] MOUNT_DIR:=code (unbedingt).")
+              # FIX 1: Q3UIDIR direkt auf $(MOUNT_DIR)/ui setzen
+              old_q3uidir = (
+                  'ifndef USE_MP_UIDIR\n'
+                  'Q3UIDIR=$(MOUNT_DIR)/q3_ui\n'
+                  'else\n'
+                  'Q3UIDIR=$(UIDIR)\n'
+                  'endif'
+              )
               if old_q3uidir in content:
                   content = content.replace(old_q3uidir, 'Q3UIDIR=$(MOUNT_DIR)/ui')
-                  print("[PATCHED] Q3UIDIR explizit auf $(MOUNT_DIR)/ui gesetzt.")
+                  print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt.")
+              else:
+                  old_q3uidir_one = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
+                  if old_q3uidir_one in content:
+                      content = content.replace(old_q3uidir_one, 'Q3UIDIR=$(MOUNT_DIR)/ui')
+                      print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt (einzeilig).")
               # FIX 2: LIB=lib64 fuer aarch64
               if 'ARCH,aarch64' not in content:
                   old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
-                  new_lib = ('else ifeq ($(ARCH),s390x) LIB=lib64 '
-                             'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
-                             'endif endif endif endif')
+                  new_lib = (
+                      'else ifeq ($(ARCH),s390x) LIB=lib64 '
+                      'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
+                      'endif endif endif endif'
+                  )
                   if old_lib in content:
                       content = content.replace(old_lib, new_lib)
                       print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt.")
@@ -257,7 +273,9 @@ jobs:
           rm -rf build/release-linux-aarch64/ || true
 
           echo "==> Smokin' Guns kompilieren (OHNE renderergl2, NUR native Module)..."
-          make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 CC="$CC" \
+          make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
+            MOUNT_DIR=code \
+            CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             BUILD_RENDERER_OPENGL2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
