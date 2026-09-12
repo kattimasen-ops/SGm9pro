@@ -43,22 +43,36 @@ jobs:
                   sys.exit(1)
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
+              # FIX 0: MOUNT_DIR fixieren
+              content = content.replace('MOUNT_DIR=', 'MOUNT_DIR:=')
+              # FIX 1: LIB=lib64 fuer aarch64
               if 'ARCH,aarch64' not in content:
                   old = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
-                  new = 'else ifeq ($(ARCH),s390x) LIB=lib64 else ifeq ($(ARCH),aarch64) LIB=lib64 endif endif endif endif endif'
+                  new = ('else ifeq ($(ARCH),s390x) LIB=lib64 '
+                         'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
+                         'endif endif endif endif')
                   if old in content:
                       content = content.replace(old, new)
                       print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
                   else:
-                      pattern = r'(LIB=lib\s+INSTALL=install\s+MKDIR=mkdir\s+ifneq.*?else ifeq \(\$\(ARCH\),s390x\)\s+LIB=lib64)(\s+endif\s+endif\s+endif\s+endif)'
-                      replacement = r'\1 else ifeq ($(ARCH),aarch64) LIB=lib64 endif\2'
-                      content, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
+                      pattern = (r'(else ifeq \(\$\(ARCH\),s390x\)\s*\n\s*LIB=lib64\s*\n)'
+                                 r'(\s*endif\s*\n\s*endif\s*\n\s*endif\s*\n\s*endif)')
+                      replacement = (r'\1else ifeq ($(ARCH),aarch64)\n  LIB=lib64\n\2')
+                      content, count = re.subn(pattern, replacement, content)
                       if count > 0:
                           print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (Fallback).")
                       else:
-                          print("[WARN] LIB=lib64 fuer aarch64 konnte nicht automatisch eingefuegt werden.")
+                          print("[WARN] LIB=lib64 fuer aarch64 konnte nicht eingefuegt werden.")
               else:
                   print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
+              # FIX 2: Q3UIDIR auf UIDIR setzen
+              if 'USE_MP_UIDIR' not in content:
+                  content = content.replace(
+                      'ifndef USE_MP_UIDIR\nQ3UIDIR=$(MOUNT_DIR)/q3_ui\nelse\nQ3UIDIR=$(UIDIR)\nendif',
+                      'Q3UIDIR=$(UIDIR)'
+                  )
+                  print("[PATCHED] Q3UIDIR auf UIDIR gesetzt.")
+              # FIX 3: renderergl2 deaktivieren
               lines = content.splitlines(keepends=True)
               new_lines = []
               for line in lines:
@@ -67,19 +81,24 @@ jobs:
                       continue
                   new_lines.append(line)
               content = "".join(new_lines)
+              # FIX 4: rm -f
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
+              # FIX 5: python3
               content = content.replace('python ', 'python3 ')
               content = content.replace('python2 ', 'python3 ')
+              # FIX 6: ARCH_STRING
               if not re.search(r'ARCH_STRING\s*=', content):
                   content = re.sub(r'(ARCH\s*=\s*[^\n]*\n)', r'\1ARCH_STRING = aarch64\n', content, count=1)
+              # FIX 7: O3
               content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
+              # FIX 8: Warn-Flags
               content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: LIB=lib64, renderergl2 deaktiviert, rm -f, python3, O3.")
+              print("[PATCHED] Makefile: MOUNT_DIR, LIB, Q3UIDIR, renderergl2, rm -f, python3, O3.")
 
           def rename_renderergl2_dir():
               renderergl2_dir = "code/renderergl2"
@@ -229,7 +248,7 @@ jobs:
 
           cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD):"
+          echo "==> Native SDL 1.2 Bibliothek gebaut:"
           ls -la /work/out/libs.aarch64/
 
           # =====================================================================
