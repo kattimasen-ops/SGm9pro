@@ -33,15 +33,7 @@ def patch_makefile():
         "override USE_MP_UIDIR = 1\n"
         "\n"
     )
-    # Finde die erste nicht-Kommentar-Zeile und fuege den Block davor ein
-    lines = content.splitlines(keepends=True)
-    insert_pos = 0
-    for i, line in enumerate(lines):
-        if not line.strip().startswith('#') and line.strip():
-            insert_pos = i
-            break
-    lines.insert(insert_pos, override_block)
-    content = "".join(lines)
+    content = override_block + content
     print("[PATCHED] override-Block am Anfang der Makefile eingefuegt.")
 
     # --- FIX 2: LIB=lib64 fuer aarch64 (offizieller ioquake3-Patch) ---
