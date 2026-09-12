@@ -19,16 +19,21 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 1: MOUNT_DIR und Q3UIDIR mit override erzwingen ---
-    # Diese Zeilen MUESSEN ganz am Anfang stehen, vor allen anderen Zuweisungen.
-    # override ueberschreibt Umgebungsvariablen UND Kommandozeilen-Variablen.
+    # --- FIX 1: override-Block GANZ AM ANFANG einfuegen ---
+    # Die Makefile inkludiert Makefile.local (Zeile 21), die Makefile.smokinguns
+    # inkludiert, die USE_MP_UIDIR = 1 setzt. Dadurch wird Q3UIDIR=$(UIDIR)
+    # und UIDIR=$(MOUNT_DIR)/ui. Wenn MOUNT_DIR leer ist, entsteht //ui/.
+    # Der override-Block MUSS VOR der -include-Zeile stehen, damit keine
+    # nachfolgende Inklusion ihn ueberschreiben kann.
     override_block = (
-        "# [PATCHED] Force MOUNT_DIR and Q3UIDIR to correct values\n"
+        "# [PATCHED] Force MOUNT_DIR, UIDIR and Q3UIDIR to correct values\n"
         "override MOUNT_DIR = code\n"
+        "override UIDIR = $(MOUNT_DIR)/ui\n"
         "override Q3UIDIR = $(MOUNT_DIR)/ui\n"
+        "override USE_MP_UIDIR = 1\n"
         "\n"
     )
-    # Fuege den Block am Anfang ein, aber nach dem ersten Kommentar-Block
+    # Finde die erste nicht-Kommentar-Zeile und fuege den Block davor ein
     lines = content.splitlines(keepends=True)
     insert_pos = 0
     for i, line in enumerate(lines):
@@ -37,7 +42,7 @@ def patch_makefile():
             break
     lines.insert(insert_pos, override_block)
     content = "".join(lines)
-    print("[PATCHED] override MOUNT_DIR = code und override Q3UIDIR = $(MOUNT_DIR)/ui am Anfang eingefuegt.")
+    print("[PATCHED] override-Block am Anfang der Makefile eingefuegt.")
 
     # --- FIX 2: LIB=lib64 fuer aarch64 (offizieller ioquake3-Patch) ---
     old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
@@ -74,38 +79,13 @@ def patch_makefile():
 SDK_Q3UIOBJ := $(subst //,/,$(SDK_Q3UIOBJ))
 SDK_Q3CGOBJ := $(subst //,/,$(SDK_Q3CGOBJ))
 SDK_Q3GOBJ := $(subst //,/,$(SDK_Q3GOBJ))
-Q3UIOBJ := $(subst //,/,$(Q3UIOBJ))
-CGAMEOBJ := $(subst //,/,$(CGAMEOBJ))
-Q3GAMEOBJ := $(subst //,/,$(Q3GAMEOBJ))
 """
     content += patch_bottom
     print("[PATCHED] $(subst)-Pfad-Sanitization injiziert.")
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: override MOUNT_DIR/Q3UIDIR, LIB=lib64, Pfad-Sanitization.")
-
-
-def patch_makefile_smokinguns():
-    """Patcht Makefile.smokinguns, falls vorhanden."""
-    makefile = "Makefile.smokinguns"
-    if not os.path.exists(makefile):
-        print(f"[INFO] {makefile} nicht vorhanden, ueberspringe.")
-        return
-    with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
-    # Fuege override-Block auch hier ein, falls die Datei direkt verwendet wird
-    if 'override MOUNT_DIR' not in content:
-        override_block = (
-            "# [PATCHED] Force MOUNT_DIR and Q3UIDIR to correct values\n"
-            "override MOUNT_DIR = code\n"
-            "override Q3UIDIR = $(MOUNT_DIR)/ui\n"
-            "\n"
-        )
-        content = override_block + content
-        with open(makefile, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"[PATCHED] {makefile}: override MOUNT_DIR/Q3UIDIR eingefuegt.")
+    print("[PATCHED] Makefile: override MOUNT_DIR/UIDIR/Q3UIDIR, LIB=lib64, Pfad-Sanitization.")
 
 
 def patch_q_platform():
@@ -148,6 +128,5 @@ def patch_q_platform():
 
 if __name__ == "__main__":
     patch_makefile()
-    patch_makefile_smokinguns()
     patch_q_platform()
     print("[DONE] Alle Patches erfolgreich angewendet.")
