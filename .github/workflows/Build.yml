@@ -1,4 +1,4 @@
-name: Create Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
+name: Cteate Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
 
 on:
   workflow_dispatch:
@@ -43,32 +43,61 @@ jobs:
                   sys.exit(1)
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
-
-              print("[DIAGNOSE] Zeilen mit 's390x' in der Makefile:")
-              for i, line in enumerate(content.splitlines(), 1):
-                  if 's390x' in line:
-                      print("  Zeile " + str(i) + ": " + line.strip())
-              print("[DIAGNOSE] --- Ende ---")
-
-              content = content.replace('//ui/', '/ui/')
-              content = content.replace('//game/', '/game/')
-              content = content.replace('//cgame/', '/cgame/')
-              content = content.replace('//qagame/', '/qagame/')
-
+              # FIX 1: MOUNT_DIR (einzeiliges Muster!)
+              old_mount = 'ifndef MOUNT_DIR MOUNT_DIR=code endif'
+              if old_mount in content:
+                  content = content.replace(old_mount, 'MOUNT_DIR:=code')
+                  print("[PATCHED] MOUNT_DIR:=code gesetzt.")
+              else:
+                  print("[WARN] MOUNT_DIR-Muster nicht gefunden.")
+                  for i, line in enumerate(content.splitlines(), 1):
+                      if 'MOUNT_DIR' in line:
+                          print(f"  Zeile {i}: {line.strip()[:120]}")
+              # FIX 2: Q3UIDIR (einzeiliges Muster!)
+              old_q3uidir = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
+              if old_q3uidir in content:
+                  content = content.replace(old_q3uidir, 'Q3UIDIR=$(MOUNT_DIR)/ui')
+                  print("[PATCHED] Q3UIDIR direkt gesetzt.")
+              else:
+                  print("[WARN] Q3UIDIR-Muster nicht gefunden.")
+              # FIX 3: LIB=lib64 fuer aarch64
+              old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
+              new_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 else ifeq ($(ARCH),aarch64) LIB=lib64 endif endif endif endif endif'
+              if old_lib in content:
+                  content = content.replace(old_lib, new_lib)
+                  print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt.")
+              else:
+                  print("[WARN] LIB-Muster nicht gefunden.")
+                  for i, line in enumerate(content.splitlines(), 1):
+                      if 's390x' in line:
+                          print(f"  Zeile {i}: {line.strip()[:150]}")
+              # FIX 4: rm -f
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
+              # FIX 5: python3
               content = content.replace('python ', 'python3 ')
               content = content.replace('python2 ', 'python3 ')
+              # FIX 6: Warn-Flags
               content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
-
-              patch = "\noverride CFLAGS += -w -fcommon\noverride BUILD_RENDERER_REND2=0\n"
-              content = patch + content
-
+              # FIX 7: Overrides am Anfang
+              patch_top = "\noverride CFLAGS += -w -fcommon\noverride BUILD_RENDERER_REND2=0\n"
+              content = patch_top + content
+              # FIX 8: $(subst)-Sanitization am Ende
+              patch_bottom = """
+# [PATCHED] Dynamically sanitize double-slashes from all generated object arrays
+Q3UIOBJ := $(subst //,/,$(Q3UIOBJ))
+CGAMEOBJ := $(subst //,/,$(CGAMEOBJ))
+Q3GAMEOBJ := $(subst //,/,$(Q3GAMEOBJ))
+UI_OBJS := $(subst //,/,$(UI_OBJS))
+CGAME_OBJS := $(subst //,/,$(CGAME_OBJS))
+GAME_OBJS := $(subst //,/,$(GAME_OBJS))
+"""
+              content += patch_bottom
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: Path expansion bugs fixed, BUILD_RENDERER_REND2=0, rm -f, python3.")
+              print("[PATCHED] Makefile: MOUNT_DIR, Q3UIDIR, LIB=lib64, Pfad-Sanitization, renderergl2 deaktiviert.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
@@ -84,29 +113,29 @@ jobs:
               replacement = r'\1#elif defined __aarch64__\n#define ARCH_STRING "aarch64"\n'
               content, count = re.subn(pattern, replacement, content)
               if count > 0:
-                  print("[PATCHED] ARCH_STRING 'aarch64' injiziert (offizieller Patch).")
+                  print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert.")
               else:
+                  print("[WARN] ARCH_STRING-Muster nicht gefunden, Fallback.")
                   aarch64_override = (
-                      "/* [PATCHED] ARM64 ARCH_STRING Override (Fallback) */\n"
+                      "/* [PATCHED] ARM64 ARCH_STRING Override */\n"
                       "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
-                      "#ifdef ARCH_STRING\n#undef ARCH_STRING\n#endif\n"
+                      "#ifdef ARCH_STRING\n"
+                      "#undef ARCH_STRING\n"
+                      "#endif\n"
                       "#define ARCH_STRING \"aarch64\"\n"
-                      "#ifndef Q3_LITTLE_ENDIAN\n#define Q3_LITTLE_ENDIAN\n#endif\n"
+                      "#ifndef Q3_LITTLE_ENDIAN\n"
+                      "#define Q3_LITTLE_ENDIAN\n"
+                      "#endif\n"
                       "#endif\n\n"
                   )
                   content = aarch64_override + content
-                  print("[PATCHED] ARCH_STRING 'aarch64' injiziert (Fallback).")
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
 
           if __name__ == "__main__":
-              if not os.path.exists("Makefile"):
-                  print("[ERROR] Makefile not present.")
-                  sys.exit(1)
               patch_makefile()
               patch_q_platform()
               print("[DONE] Alle Patches erfolgreich angewendet.")
-
           PY_EOF
 
       - name: Write in-container build script
@@ -143,6 +172,9 @@ jobs:
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
 
+          # =====================================================================
+          # SCHRITT 1: GL4ES bauen
+          # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -156,6 +188,9 @@ jobs:
           cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
           cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
+          # =====================================================================
+          # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
+          # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
             git clone --depth=1 https://github.com/libsdl-org/SDL-1.2.git
@@ -200,6 +235,12 @@ jobs:
 
           cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
+          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD):"
+          ls -la /work/out/libs.aarch64/
+
+          # =====================================================================
+          # SCHRITT 3: Smokin' Guns Engine + Native Module bauen
+          # =====================================================================
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
@@ -210,12 +251,11 @@ jobs:
           echo "==> Alte Artefakte bereinigen..."
           rm -rf build/release-linux-aarch64/ || true
 
-          echo "==> Smokin' Guns kompilieren (native Module, REND2 aus)..."
+          echo "==> Smokin' Guns kompilieren (NUR native Module, OHNE QVM)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             MOUNT_DIR=code \
             CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
-            BUILD_RENDERER_REND2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
@@ -231,16 +271,35 @@ jobs:
             exit 1
           fi
 
+          echo "==> Inhalt von BUILD_OUT:"
+          ls -la "$BUILD_OUT"
+
           ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
           if [ -z "$ENGINE_BIN" ]; then
             echo "[ERROR] Keine Engine-Binary in $BUILD_OUT gefunden"
             exit 1
           fi
+          echo "==> Engine-Binary erkannt: $ENGINE_BIN"
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
+          echo "==> Native .so-Module suchen..."
+          find "$BUILD_OUT" -name '*.so' -type f -print
           find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
 
+          echo "==> Finale Spiel-Ausgabe (NICHT umbenennen – Engine erwartet Arch-Suffix):"
+          ls -la /work/out/game/
+
+          for mod in cgame qagame ui; do
+            if ls /work/out/game/${mod}*.so 1>/dev/null 2>&1; then
+              echo "  [OK] ${mod}*.so gefunden:"
+              ls /work/out/game/${mod}*.so
+            else
+              echo "  [WARN] ${mod}*.so NICHT gefunden!"
+            fi
+          done
+
+          echo "==> Build abgeschlossen!"
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
@@ -266,6 +325,9 @@ jobs:
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
+          echo "=== Paketinhalt ==="
+          find "$PKG" -type f | sort
+
           cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
           {
             "version": 3,
@@ -275,7 +337,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and native SDL 1.2. No QVM, no REND2. Cortex-A35 optimized.",
+              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2. No sdl12-compat, no QVM. Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -305,8 +367,6 @@ jobs:
               source "${controlfolder}/control.txt"
               [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
               get_controls
-          else
-              echo "ERROR: ${controlfolder}/control.txt not found." >&2
           fi
 
           cd "$GAMEDIR" || exit 1
@@ -314,21 +374,27 @@ jobs:
           mkdir -p "${GAMEDIR}/.smokinguns"
 
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-          echo 10 | $ESUDO tee /proc/sys/vm/swappiness 2>/dev/null || true
-          echo 1 | $ESUDO tee /proc/sys/vm/overcommit_memory 2>/dev/null || true
+          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
+          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
+
+          echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
+          echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
 
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
           export LIBGL_FB=1
-          export LIBGL_FBO=640x480
+          export LIBGL_FBO=0
           export LIBGL_NOERROR=1
           export LIBGL_FORCE16BITS=1
           export LIBGL_BATCH=100
+          export LIBGL_BEGINEND=2
           export LIBGL_FASTMATH=1
           export LIBGL_NOBANNER=1
           export LIBGL_VSYNC=0
+          export LIBGL_SILENTSTUB=1
           export LIBGL_XREFRESH=0
+          export LIBGL_RECYCLEFBO=1
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
@@ -348,7 +414,6 @@ jobs:
             +set vm_game 0 \
             +set vm_ui 0 \
             +set s_useOpenAL 0 \
-            +set r_mode -1 \
             +set r_customwidth 640 \
             +set r_customheight 480 \
             +set r_fullscreen 1 \
@@ -361,7 +426,6 @@ jobs:
           $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null || true
           $ESUDO setterm -cursor on > /dev/tty1 2>/dev/null || true
           printf "\033c" > /dev/tty1 2>/dev/null || true
-          echo "Game exited cleanly."
           exit 0
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
