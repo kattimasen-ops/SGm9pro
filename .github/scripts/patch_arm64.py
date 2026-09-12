@@ -19,35 +19,33 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 1: MOUNT_DIR unbedingt setzen (einzeiliges Muster!) ---
-    old_mount = 'ifndef MOUNT_DIR MOUNT_DIR=code endif'
-    new_mount = 'MOUNT_DIR:=code'
-    if old_mount in content:
-        content = content.replace(old_mount, new_mount)
-        print("[PATCHED] MOUNT_DIR:=code gesetzt.")
-    else:
-        print("[WARN] MOUNT_DIR-Muster nicht gefunden. Diagnose:")
-        for i, line in enumerate(content.splitlines(), 1):
-            if 'MOUNT_DIR' in line:
-                print(f"  Zeile {i}: {line.strip()[:120]}")
+    # --- FIX 1: MOUNT_DIR und Q3UIDIR mit override erzwingen ---
+    # Diese Zeilen MUESSEN ganz am Anfang stehen, vor allen anderen Zuweisungen.
+    # override ueberschreibt Umgebungsvariablen UND Kommandozeilen-Variablen.
+    override_block = (
+        "# [PATCHED] Force MOUNT_DIR and Q3UIDIR to correct values\n"
+        "override MOUNT_DIR = code\n"
+        "override Q3UIDIR = $(MOUNT_DIR)/ui\n"
+        "\n"
+    )
+    # Fuege den Block am Anfang ein, aber nach dem ersten Kommentar-Block
+    lines = content.splitlines(keepends=True)
+    insert_pos = 0
+    for i, line in enumerate(lines):
+        if not line.strip().startswith('#') and line.strip():
+            insert_pos = i
+            break
+    lines.insert(insert_pos, override_block)
+    content = "".join(lines)
+    print("[PATCHED] override MOUNT_DIR = code und override Q3UIDIR = $(MOUNT_DIR)/ui am Anfang eingefuegt.")
 
-    # --- FIX 2: Q3UIDIR direkt auf $(MOUNT_DIR)/ui setzen (einzeiliges Muster!) ---
-    old_q3uidir = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
-    new_q3uidir = 'Q3UIDIR=$(MOUNT_DIR)/ui'
-    if old_q3uidir in content:
-        content = content.replace(old_q3uidir, new_q3uidir)
-        print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt.")
-    else:
-        print("[WARN] Q3UIDIR-Muster nicht gefunden. Diagnose:")
-        for i, line in enumerate(content.splitlines(), 1):
-            if 'Q3UIDIR' in line:
-                print(f"  Zeile {i}: {line.strip()[:120]}")
-
-    # --- FIX 3: LIB=lib64 fuer aarch64 (offizieller ioquake3-Patch) ---
+    # --- FIX 2: LIB=lib64 fuer aarch64 (offizieller ioquake3-Patch) ---
     old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
-    new_lib = ('else ifeq ($(ARCH),s390x) LIB=lib64 '
-               'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
-               'endif endif endif endif')
+    new_lib = (
+        'else ifeq ($(ARCH),s390x) LIB=lib64 '
+        'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
+        'endif endif endif endif'
+    )
     if old_lib in content:
         content = content.replace(old_lib, new_lib)
         print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
@@ -57,40 +55,57 @@ def patch_makefile():
             if 's390x' in line:
                 print(f"  Zeile {i}: {line.strip()[:150]}")
 
-    # --- FIX 4: rm-Befehle safe machen ---
+    # --- FIX 3: rm-Befehle safe machen ---
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
-    # --- FIX 5: python3 erzwingen ---
+    # --- FIX 4: python3 erzwingen ---
     content = content.replace('python ', 'python3 ')
     content = content.replace('python2 ', 'python3 ')
 
-    # --- FIX 6: Strikte Warn-Flags entfernen ---
+    # --- FIX 5: Strikte Warn-Flags entfernen ---
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
     content = re.sub(r'-Wuninitialized', '', content)
     content = re.sub(r'-Wstrict-overflow', '', content)
 
-    # --- FIX 7: Overrides am Anfang injizieren ---
-    patch_top = "\noverride CFLAGS += -w -fcommon\noverride BUILD_RENDERER_REND2=0\n"
-    content = patch_top + content
-    print("[PATCHED] CFLAGS- und BUILD_RENDERER_REND2-Overrides injiziert.")
-
-    # --- FIX 8: Dynamische $(subst)-Sanitization am Ende injizieren ---
+    # --- FIX 6: $(subst)-Sanitization am Ende (korrekte Variablennamen) ---
     patch_bottom = """
 # [PATCHED] Dynamically sanitize double-slashes from all generated object arrays
+SDK_Q3UIOBJ := $(subst //,/,$(SDK_Q3UIOBJ))
+SDK_Q3CGOBJ := $(subst //,/,$(SDK_Q3CGOBJ))
+SDK_Q3GOBJ := $(subst //,/,$(SDK_Q3GOBJ))
 Q3UIOBJ := $(subst //,/,$(Q3UIOBJ))
 CGAMEOBJ := $(subst //,/,$(CGAMEOBJ))
 Q3GAMEOBJ := $(subst //,/,$(Q3GAMEOBJ))
-UI_OBJS := $(subst //,/,$(UI_OBJS))
-CGAME_OBJS := $(subst //,/,$(CGAME_OBJS))
-GAME_OBJS := $(subst //,/,$(GAME_OBJS))
 """
     content += patch_bottom
-    print("[PATCHED] Dynamische $(subst)-Pfad-Sanitization injiziert.")
+    print("[PATCHED] $(subst)-Pfad-Sanitization injiziert.")
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: MOUNT_DIR, Q3UIDIR, LIB=lib64, Pfad-Sanitization, renderergl2 deaktiviert.")
+    print("[PATCHED] Makefile: override MOUNT_DIR/Q3UIDIR, LIB=lib64, Pfad-Sanitization.")
+
+
+def patch_makefile_smokinguns():
+    """Patcht Makefile.smokinguns, falls vorhanden."""
+    makefile = "Makefile.smokinguns"
+    if not os.path.exists(makefile):
+        print(f"[INFO] {makefile} nicht vorhanden, ueberspringe.")
+        return
+    with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+    # Fuege override-Block auch hier ein, falls die Datei direkt verwendet wird
+    if 'override MOUNT_DIR' not in content:
+        override_block = (
+            "# [PATCHED] Force MOUNT_DIR and Q3UIDIR to correct values\n"
+            "override MOUNT_DIR = code\n"
+            "override Q3UIDIR = $(MOUNT_DIR)/ui\n"
+            "\n"
+        )
+        content = override_block + content
+        with open(makefile, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"[PATCHED] {makefile}: override MOUNT_DIR/Q3UIDIR eingefuegt.")
 
 
 def patch_q_platform():
@@ -133,5 +148,6 @@ def patch_q_platform():
 
 if __name__ == "__main__":
     patch_makefile()
+    patch_makefile_smokinguns()
     patch_q_platform()
     print("[DONE] Alle Patches erfolgreich angewendet.")
