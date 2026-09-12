@@ -21,30 +21,29 @@ def patch_makefile():
         content = f.read()
 
     # --- FIX 1: LIB=lib64 fuer ARCH=aarch64 (offizieller ioquake3-Patch) ---
-    # Der Patch fuegt nach dem s390x-Block einen aarch64-Block ein.
+    # Die Makefile hat den LIB-Block in einer einzigen Zeile.
+    # Der offizielle Patch fuegt else ifeq ($(ARCH),aarch64) LIB=lib64
+    # direkt nach dem s390x-Block ein und ein weiteres endif am Ende.
     if 'ARCH,aarch64' not in content:
-        pattern = r'(\s*else ifeq \(\$\(ARCH\),s390x\)\s*\n\s*LIB=lib64\s*\n)'
-        replacement = r'\1else ifeq ($(ARCH),aarch64)\n  LIB=lib64\n'
-        content, count = re.subn(pattern, replacement, content)
-        if count == 0:
-            # Fallback: Fuege vor der ersten LIB=lib-Zeile ein
-            pattern2 = r'(\s*LIB=lib\s*\n)'
-            content, count = re.subn(
-                pattern2,
-                r'ifeq ($(ARCH),aarch64)\n  LIB=lib64\nendif\n\1',
-                content
-            )
-            if count == 0:
-                print("[WARN] LIB=lib64 fuer aarch64 konnte nicht automatisch eingefuegt werden.")
-            else:
-                print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (Fallback).")
-        else:
+        # Robuster Ansatz: Ersetze die eindeutige s390x-Sequenz
+        old = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
+        new = 'else ifeq ($(ARCH),s390x) LIB=lib64 else ifeq ($(ARCH),aarch64) LIB=lib64 endif endif endif endif endif'
+        if old in content:
+            content = content.replace(old, new)
             print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
+        else:
+            # Fallback: Suche nach der Zeile mit dem LIB-Block
+            pattern = r'(LIB=lib\s+INSTALL=install\s+MKDIR=mkdir\s+ifneq.*?else ifeq \(\$\(ARCH\),s390x\)\s+LIB=lib64)(\s+endif\s+endif\s+endif\s+endif)'
+            replacement = r'\1 else ifeq ($(ARCH),aarch64) LIB=lib64 endif\2'
+            content, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
+            if count > 0:
+                print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (Fallback).")
+            else:
+                print("[WARN] LIB=lib64 fuer aarch64 konnte nicht automatisch eingefuegt werden.")
     else:
         print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
 
     # --- FIX 2: renderergl2 aus der TARGETS-Variable entfernen ---
-    # ioquake3 auf ARM64 hat keinen funktionierenden renderergl2.
     lines = content.splitlines(keepends=True)
     new_lines = []
     for line in lines:
