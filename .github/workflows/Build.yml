@@ -1,4 +1,4 @@
-name: Fianly Create my Smokin' Guns for RK3326 (PortMaster) - SDL12-Compat ARM64 Build
+name: Final Create my Smokin' Guns for RK3326 (PortMaster) - SDL12-Compat ARM64 Build
 
 on:
   workflow_dispatch:
@@ -87,14 +87,14 @@ jobs:
 
           # ----------------------------------------------------------------
           # libsdl1.2-compat (SDL 1.2 API on top of SDL 2.0)
-          # Joystick support is built in – no special flag needed.
-          # KMSDRM works through the SDL2 backend.
+          # Patch for SDL2 < 2.0.22 (SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER)
           # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d sdl12-compat ]; then
             git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
           fi
           cd sdl12-compat
+          python3 /work/patch_arm64.py   # applies sdl12-compat hint patch
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
@@ -105,7 +105,7 @@ jobs:
           SDL12_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
           [ -n "$SDL12_LIB" ] || { echo "[ERROR] sdl12-compat lib not produced"; exit 1; }
 
-          # Verify the joystick symbol is present.
+          # Verify joystick symbol is present.
           if ! nm -D --defined-only "$SDL12_LIB" | grep -q ' SDL_JoystickClose$' ; then
             echo "[ERROR] libSDL-1.2.so.0 does not export SDL_JoystickClose"
             exit 1
@@ -113,7 +113,7 @@ jobs:
           echo "[OK] libSDL-1.2.so.0 exports SDL_JoystickClose"
           cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          # Also copy the system SDL2 library – sdl12-compat needs it at runtime.
+          # Also copy the system SDL2 library -- sdl12-compat needs it at runtime.
           cp /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /work/out/libs.aarch64/libSDL2-2.0.so.0
 
           # ----------------------------------------------------------------
