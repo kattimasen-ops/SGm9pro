@@ -1,4 +1,4 @@
-name: Finalize Smokin' Guns for RK3326 (PortMaster) - SDL12-Compat ARM64 Build
+name: Create my Smokin' Guns for RK3326 (PortMaster) - SDL12-Compat ARM64 Build
 
 on:
   workflow_dispatch:
@@ -75,8 +75,8 @@ jobs:
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="$OPTIMIZE" \
-            -DNOX11=ON -DGLX_STUBS=ON -DEGL_WRAPPER=ON -DGBM=ON \
-            -DSTATICLIB=OFF -DDEFAULT_ES=2 -DNOERROR=ON
+            -DNOX11=ON -DGBM=ON -DEGL_WRAPPER=ON \
+            -DDEFAULT_ES=2 -DSTATICLIB=OFF
           make -j"$(nproc)"
 
           GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
@@ -94,8 +94,14 @@ jobs:
           fi
           cd sdl12-compat
 
-          # Patch for SDL2 < 2.0.22 hints before configuring
+          # Patch SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER for SDL 2.0.10
           python3 /work/patch_arm64.py
+
+          # Verify the patch landed in the file
+          if ! grep -q "SDL_HINT_VIDEODRIVER" src/SDL12_compat.c; then
+            echo "[ERROR] SDL_HINT_VIDEODRIVER was not patched into SDL12_compat.c"
+            exit 1
+          fi
 
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
@@ -257,7 +263,6 @@ jobs:
           cat > "$PKG/Smokin Guns.sh" << 'LAUNCH_EOF'
           #!/bin/bash
           # PortMaster launch script for Smokin' Guns (RK3326 / ArkOS4Clone)
-          # Uses libsdl1.2-compat (SDL2/KMSDRM backend) with joystick support.
 
           GAMEDIR="/roms/ports/smokinguns"
           LOG_FILE="${GAMEDIR}/debug.log"
@@ -314,10 +319,6 @@ jobs:
           echo "SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
           echo "SDL_AUDIODRIVER=$SDL_AUDIODRIVER"
           echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-          echo "--- game dir ---"
-          ls -la "${GAMEDIR}/smokinguns/" 2>&1 || true
-          echo "--- libs ---"
-          ls -la "${GAMEDIR}/libs.aarch64/" 2>&1 || true
           echo "--- drm devices ---"
           ls -la /dev/dri/ 2>&1 || true
           echo "--- input devices ---"
