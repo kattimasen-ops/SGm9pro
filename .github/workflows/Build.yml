@@ -86,7 +86,13 @@ jobs:
           cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
 
           # ----------------------------------------------------------------
-          # SDL 1.2 built from source (ALSA + fbcon, no X11)
+          # SDL 1.2 built from source.
+          # Required features:
+          #   --enable-joystick        engine references SDL_JoystickClose
+          #   --enable-video-opengl    engine calls SDL_GL_* + SDL_SetVideoMode(...OPENGL)
+          #   --enable-input-events    /dev/input/event* for joysticks
+          #   --enable-video-fbcon     ONLY viable video driver in SDL 1.2 on RK3326
+          #   --enable-audio-alsa      audio
           # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
@@ -107,11 +113,12 @@ jobs:
             --enable-video-directfb \
             --disable-video-ps3 \
             --disable-video-svga \
-            --disable-video-opengl \
+            --enable-video-opengl \
             --disable-audio-oss \
             --disable-audio-dma \
             --enable-audio-alsa \
-            --disable-joystick \
+            --enable-joystick \
+            --enable-input-events \
             --disable-cdrom \
             --disable-esd \
             --disable-nas \
@@ -125,8 +132,19 @@ jobs:
             LDFLAGS="$LDFLAGS"
 
           make -j"$(nproc)"
+
           SDL12_LIB="$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)"
           [ -n "$SDL12_LIB" ] || { echo "[ERROR] SDL-1.2 not produced"; exit 1; }
+
+          # Verify that every symbol the engine needs is actually exported.
+          for sym in SDL_JoystickClose SDL_JoystickOpen SDL_GL_SetAttribute \
+                     SDL_GL_GetProcAddress SDL_SetVideoMode SDL_AudioDriverName ; do
+            if ! nm -D --defined-only "$SDL12_LIB" | grep -q " $sym\$" ; then
+              echo "[ERROR] libSDL-1.2.so.0 does not export $sym"
+              exit 1
+            fi
+          done
+          echo "[OK] libSDL-1.2.so.0 exports all required symbols"
           cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
           # ----------------------------------------------------------------
@@ -139,8 +157,6 @@ jobs:
           echo "==> Applying ARM64 patch script..."
           python3 /work/patch_arm64.py
 
-          # Belt-and-suspenders: if the python patch somehow missed the typo,
-          # fix it with sed before make sees it.
           if grep -q '\$(B)/\$(BASENAME)/ui/ui_syscalls.o' Makefile; then
             echo "==> sed fallback applied for BASENAME typo"
             sed -i 's|\$(B)/\$(BASENAME)/ui/ui_syscalls.o|$(B)/$(BASEGAME)/ui/ui_syscalls.o|g' Makefile
@@ -148,10 +164,6 @@ jobs:
 
           rm -rf build/release-linux-aarch64/ || true
 
-          # -j$(nproc) instead of -j1: the previous single-threaded run took
-          # ~26 minutes for a job the parallel parts finish in a fraction of
-          # that.  BUILD_RENDERER_REND2=0 skips renderergl2 which is useless
-          # on Mali-G31 (OpenGL ES 2.0 only) and saves ~3.5 minutes.
           echo "==> Building Smokin' Guns (native SO, REND1 only)"
           make release -j"$(nproc)" \
             PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
@@ -172,14 +184,11 @@ jobs:
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          # Renderers live directly under BUILD_OUT (next to the engine).
           find "$BUILD_OUT" -maxdepth 1 -name 'renderer_*.so' -exec cp {} /work/out/game/ \;
 
-          # Native game modules live under BUILD_OUT/smokinguns/.
           if [ -d "$BUILD_OUT/smokinguns" ]; then
             mkdir -p /work/out/game/modules
             find "$BUILD_OUT/smokinguns" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/modules/ \;
-            ls -la /work/out/game/modules/
           fi
 
           echo "==> Layout of /work/out/game:"
@@ -206,24 +215,19 @@ jobs:
           mkdir -p "$PKG/${PORT_DIR}/libs.aarch64"
           mkdir -p "$PKG/${PORT_DIR}/${PORT_DIR}"
 
-          # Engine binary at the root of the port dir
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
 
-          # Renderers next to the engine binary
           find work/out/game -maxdepth 1 -name 'renderer_*.so' -exec cp {} "$PKG/${PORT_DIR}/" \;
 
-          # Native game modules in the basegame dir
           if [ -d work/out/game/modules ]; then
             find work/out/game/modules -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \;
           fi
 
-          # Shared libraries
           cp work/out/libs.aarch64/libGL.so.1      "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1     "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
 
-          # gptk mapping file is expected by the launch script — provide one
           cat > "$PKG/${PORT_DIR}/smokinguns.gptk" << 'GPTK_EOF'
           [ANALOG1]
           UP = W
@@ -281,9 +285,14 @@ jobs:
 
           cat > "$PKG/Smokin Guns.sh" << 'LAUNCH_EOF'
           #!/bin/bash
+          # PortMaster launch script for Smokin' Guns (RK3326 / ArkOS4Clone)
+          # Uses native SDL 1.2 with fbcon video driver.
+
           GAMEDIR="/roms/ports/smokinguns"
           LOG_FILE="${GAMEDIR}/debug.log"
           exec > >(tee -a "$LOG_FILE") 2>&1
+          echo "=== Smokin' Guns launch ==="
+          echo "Date: $(date)"
 
           XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
           if [ -d "/opt/system/Tools/PortMaster/" ]; then
@@ -306,12 +315,11 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
-          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
-
-          echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
-          echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
+          # Native SDL 1.2 video drivers on RK3326: fbcon only.
+          # kmsdrm does not exist in SDL 1.2 (only SDL 2).
+          export SDL_VIDEODRIVER=fbcon
+          export SDL_AUDIODRIVER=alsa
+          export SDL_JOYSTICK_DEVICE=/dev/input/js0
 
           export LIBGL_ES=2
           export LIBGL_GL=1
@@ -331,11 +339,23 @@ jobs:
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
-          export SDL_VIDEODRIVER=kmsdrm
-          export SDL_AUDIODRIVER=alsa
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
+          echo "--- environment ---"
+          echo "SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
+          echo "SDL_AUDIODRIVER=$SDL_AUDIODRIVER"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+          echo "--- game dir ---"
+          ls -la "${GAMEDIR}/smokinguns/" 2>&1 || true
+          echo "--- libs ---"
+          ls -la "${GAMEDIR}/libs.aarch64/" 2>&1 || true
+          echo "--- fb devices ---"
+          ls -la /dev/fb* 2>&1 || true
+          echo "--- input devices ---"
+          ls -la /dev/input/js* /dev/input/event* 2>&1 || true
+
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
+          GPTOKEYB_PID=$!
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0:${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
             "${GAMEDIR}/smokinguns.aarch64" \
@@ -354,12 +374,13 @@ jobs:
             +set fs_homepath "${GAMEDIR}" \
             +set fs_game smokinguns
 
+          GAME_EXIT=$?
+          echo "Game exited with code: ${GAME_EXIT}"
+
           unset LD_PRELOAD
           unset LD_LIBRARY_PATH
-          $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null || true
-          $ESUDO setterm -cursor on > /dev/tty1 2>/dev/null || true
-          printf "\033c" > /dev/tty1 2>/dev/null || true
-          exit 0
+          [ -n "$GPTOKEYB_PID" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
+          exit $GAME_EXIT
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
 
