@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Patch Smokin' Guns for ARM64 (aarch64) cross-compilation.
-Run from the SmokinGuns source root.
+Patch Smokin' Guns for ARM64 (aarch64) cross-compilation,
+and patch sdl12-compat for older SDL2 headers.
 """
 
 import os
@@ -10,11 +10,6 @@ import sys
 
 
 def diagnostic_dump():
-    """Print the top of each Makefile and any line mentioning ui/DIR/OBJ.
-
-    Useful for future debugging if the BASENAME typo reappears in a different
-    form after an upstream sync.
-    """
     print("========== MAKEFILE DIAGNOSTIC DUMP ==========")
     for fname in ["Makefile", "Makefile.local", "Makefile.smokinguns"]:
         if not os.path.exists(fname):
@@ -37,17 +32,6 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # ------------------------------------------------------------------
-    # CRITICAL: the upstream Makefile uses $(BASENAME) instead of
-    # $(BASEGAME) in the SDK-UI object list.  BASENAME is never defined,
-    # so the path becomes "build/release-linux-aarch64//ui/ui_syscalls.o"
-    # and make aborts with:
-    #     No rule to make target '.../release-linux-aarch64//ui/ui_syscalls.o'
-    #
-    # Evidence: Makefile line 2531, seen in the build log:
-    #     Q3UIOBJ = $(Q3UIOBJ_) $(B)/$(BASENAME)/ui/ui_syscalls.o
-    # The neighbouring GAME and CGAME lines use $(BASEGAME) correctly.
-    # ------------------------------------------------------------------
     before = content
     content = content.replace(
         "$(B)/$(BASENAME)/ui/ui_syscalls.o",
@@ -56,11 +40,8 @@ def patch_makefile():
     if content != before:
         print("[PATCHED] Makefile: $(BASENAME) -> $(BASEGAME) in Q3UIOBJ")
     else:
-        print("[INFO] Makefile: BASENAME typo not present (already patched?)")
+        print("[INFO] Makefile: BASENAME typo not present")
 
-    # ------------------------------------------------------------------
-    # Generic hygiene (unchanged from previous working version)
-    # ------------------------------------------------------------------
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
     content = content.replace("python ", "python3 ")
     content = content.replace("python2 ", "python3 ")
@@ -71,16 +52,10 @@ def patch_makefile():
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: hygiene (rm -f, python3, -Werror removed)")
+    print("[PATCHED] Makefile: hygiene")
 
 
 def patch_q_platform():
-    """Walk code/ and patch every q_platform.h we find.
-
-    The tree contains exactly one authoritative copy at code/qcommon/, but
-    we walk the whole tree so a future upstream reorganisation does not
-    silently break the ARM64 build.
-    """
     patched = 0
     for root, _dirs, files in os.walk("code"):
         for name in files:
@@ -91,13 +66,9 @@ def patch_q_platform():
                 content = f.read()
 
             if re.search(r'ARCH_STRING\s+"aarch64"', content):
-                # Already patched in this copy — skip.
                 continue
 
             changed = False
-
-            # Preferred form: add an #elif right after the ARM32 branch,
-            # matching the existing style of the file.
             pattern = re.compile(
                 r'(#elif defined __arm__\s*\n#define ARCH_STRING "arm"\s*\n)'
             )
@@ -109,7 +80,6 @@ def patch_q_platform():
                 content = new_content
                 changed = True
             else:
-                # Fallback: prepend a hard override block.
                 override = (
                     "/* [PATCHED] ARM64 ARCH_STRING override */\n"
                     "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
@@ -127,18 +97,64 @@ def patch_q_platform():
                 patched += 1
                 print(f"[PATCHED] {path}")
 
-    if patched == 0:
-        print("[INFO] q_platform.h already patched (no change)")
-    else:
-        print(f"[INFO] {patched} q_platform.h file(s) patched")
+    print(f"[INFO] {patched} q_platform.h file(s) patched")
+
+
+def patch_sdl12_compat():
+    """Patch sdl12-compat to define SDL_HINT_VIDEODRIVER and
+    SDL_HINT_AUDIODRIVER for SDL2 < 2.0.22.
+    See https://github.com/libsdl-org/sdl12-compat/issues/324
+    """
+    path = "src/SDL12_compat.c"
+    if not os.path.exists(path):
+        print(f"[WARN] {path} not found - skipping sdl12-compat patch")
+        return
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    if "#ifndef SDL_HINT_VIDEODRIVER" in content:
+        print("[INFO] sdl12-compat already patched")
+        return
+
+    # Insert right after the last #include line, before any code.
+    # Find the include block and append after it.
+    includes = list(re.finditer(r'^#include\s+.*$', content, re.MULTILINE))
+    if not includes:
+        print("[WARN] no #include found in SDL12_compat.c")
+        return
+
+    insert_pos = includes[-1].end()
+    patch = (
+        "\n\n"
+        "/* [PATCHED] Define SDL_HINT_VIDEODRIVER and SDL_HINT_AUDIODRIVER\n"
+        " * for SDL2 versions older than 2.0.22 where these hints were not\n"
+        " * yet formalised.  They were introduced as full hints in SDL 2.0.22.\n"
+        " */\n"
+        "#ifndef SDL_HINT_VIDEODRIVER\n"
+        "#define SDL_HINT_VIDEODRIVER \"SDL_VIDEODRIVER\"\n"
+        "#endif\n"
+        "#ifndef SDL_HINT_AUDIODRIVER\n"
+        "#define SDL_HINT_AUDIODRIVER \"SDL_AUDIODRIVER\"\n"
+        "#endif\n"
+    )
+    content = content[:insert_pos] + patch + content[insert_pos:]
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined")
 
 
 if __name__ == "__main__":
     if not os.path.exists("Makefile"):
-        print("[ERROR] Must be run from the SmokinGuns source root.")
+        print("[ERROR] Must be run from the SmokinGuns source root for patch_makefile/patch_q_platform.")
+        # Still try sdl12-compat patch if the file exists
+        if os.path.exists("src/SDL12_compat.c"):
+            patch_sdl12_compat()
         sys.exit(1)
 
     diagnostic_dump()
     patch_makefile()
     patch_q_platform()
+    patch_sdl12_compat()
     print("[DONE] All patches applied.")
