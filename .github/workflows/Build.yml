@@ -34,6 +34,7 @@ jobs:
         run: |
           mkdir -p work/src work/out/game work/out/libs.aarch64
           cp .github/scripts/patch_arm64.py work/patch_arm64.py
+
           cat > work/build.sh << 'BUILD_SCRIPT_EOF'
           #!/bin/bash
           set -euo pipefail
@@ -65,6 +66,9 @@ jobs:
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
 
+          # ----------------------------------------------------------------
+          # GL4ES
+          # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -75,9 +79,15 @@ jobs:
             -DSTATICLIB=OFF -DDEFAULT_ES=2 -DNOERROR=ON
           make -j"$(nproc)"
 
-          cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
-          cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
+          GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
+          EGL_LIB="$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)"
+          [ -n "$GL4ES_LIB" ] && [ -n "$EGL_LIB" ] || { echo "[ERROR] GL4ES libs missing"; exit 1; }
+          cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
+          cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
 
+          # ----------------------------------------------------------------
+          # SDL 1.2 built from source (ALSA + fbcon, no X11)
+          # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
             git clone --depth=1 https://github.com/libsdl-org/SDL-1.2.git
@@ -88,11 +98,7 @@ jobs:
             chmod +x autogen.sh 2>/dev/null || true
             ./autogen.sh || autoreconf -fi || true
           fi
-
-          if [ ! -f configure ]; then
-            echo "[ERROR] configure konnte nicht erzeugt werden!"
-            exit 1
-          fi
+          [ -f configure ] || { echo "[ERROR] configure was not generated"; exit 1; }
 
           ./configure \
             --prefix=/usr \
@@ -119,18 +125,39 @@ jobs:
             LDFLAGS="$LDFLAGS"
 
           make -j"$(nproc)"
-          cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
+          SDL12_LIB="$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)"
+          [ -n "$SDL12_LIB" ] || { echo "[ERROR] SDL-1.2 not produced"; exit 1; }
+          cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
+          # ----------------------------------------------------------------
+          # Smokin' Guns
+          # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
+          echo "==> Applying ARM64 patch script..."
           python3 /work/patch_arm64.py
+
+          # Belt-and-suspenders: if the python patch somehow missed the typo,
+          # fix it with sed before make sees it.
+          if grep -q '\$(B)/\$(BASENAME)/ui/ui_syscalls.o' Makefile; then
+            echo "==> sed fallback applied for BASENAME typo"
+            sed -i 's|\$(B)/\$(BASENAME)/ui/ui_syscalls.o|$(B)/$(BASEGAME)/ui/ui_syscalls.o|g' Makefile
+          fi
+
           rm -rf build/release-linux-aarch64/ || true
 
-          make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
+          # -j$(nproc) instead of -j1: the previous single-threaded run took
+          # ~26 minutes for a job the parallel parts finish in a fraction of
+          # that.  BUILD_RENDERER_REND2=0 skips renderergl2 which is useless
+          # on Mali-G31 (OpenGL ES 2.0 only) and saves ~3.5 minutes.
+          echo "==> Building Smokin' Guns (native SO, REND1 only)"
+          make release -j"$(nproc)" \
+            PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
+            BUILD_RENDERER_REND2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
@@ -138,22 +165,38 @@ jobs:
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          if [ -z "$BUILD_OUT" ]; then
-            echo "[ERROR] Build failed. Check diagnostic dump above for Makefile definitions."
-            exit 1
-          fi
+          [ -n "$BUILD_OUT" ] || { echo "[ERROR] build dir missing"; exit 1; }
 
           ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
+          [ -n "$ENGINE_BIN" ] || { echo "[ERROR] engine binary missing"; exit 1; }
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
+          # Renderers live directly under BUILD_OUT (next to the engine).
+          find "$BUILD_OUT" -maxdepth 1 -name 'renderer_*.so' -exec cp {} /work/out/game/ \;
+
+          # Native game modules live under BUILD_OUT/smokinguns/.
+          if [ -d "$BUILD_OUT/smokinguns" ]; then
+            mkdir -p /work/out/game/modules
+            find "$BUILD_OUT/smokinguns" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/modules/ \;
+            ls -la /work/out/game/modules/
+          fi
+
+          echo "==> Layout of /work/out/game:"
+          ls -la /work/out/game/
+          file /work/out/game/smokinguns.aarch64
+          file /work/out/libs.aarch64/libGL.so.1
+          file /work/out/libs.aarch64/libEGL.so.1
+          file /work/out/libs.aarch64/libSDL-1.2.so.0
+          echo "Build finished successfully."
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
       - name: Build inside Ubuntu 20.04 aarch64 container
         run: |
-          docker run --rm --platform linux/arm64 -v "${{ github.workspace }}/work":/work -w /work ubuntu:20.04 bash /work/build.sh
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}/work":/work \
+            -w /work ubuntu:20.04 bash /work/build.sh
 
       - name: Assemble PortMaster Package
         run: |
@@ -163,15 +206,60 @@ jobs:
           mkdir -p "$PKG/${PORT_DIR}/libs.aarch64"
           mkdir -p "$PKG/${PORT_DIR}/${PORT_DIR}"
 
+          # Engine binary at the root of the port dir
           cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
           chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
 
-          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \; 2>/dev/null || true
-          find work/out/game -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/" \; 2>/dev/null || true
+          # Renderers next to the engine binary
+          find work/out/game -maxdepth 1 -name 'renderer_*.so' -exec cp {} "$PKG/${PORT_DIR}/" \;
 
-          cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
-          cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
+          # Native game modules in the basegame dir
+          if [ -d work/out/game/modules ]; then
+            find work/out/game/modules -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \;
+          fi
+
+          # Shared libraries
+          cp work/out/libs.aarch64/libGL.so.1      "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
+          cp work/out/libs.aarch64/libEGL.so.1     "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
+
+          # gptk mapping file is expected by the launch script — provide one
+          cat > "$PKG/${PORT_DIR}/smokinguns.gptk" << 'GPTK_EOF'
+          [ANALOG1]
+          UP = W
+          DOWN = S
+          LEFT = A
+          RIGHT = D
+
+          [ANALOG2]
+          UP = mouse_move_up
+          DOWN = mouse_move_down
+          LEFT = mouse_move_left
+          RIGHT = mouse_move_right
+
+          [BUTTONS]
+          A = mouse_left
+          B = mouse_right
+          X = SPACE
+          Y = R
+          L1 = TAB
+          R1 = mouse_middle
+          L2 = Q
+          R2 = E
+          START = ESCAPE
+          SELECT = F1
+          L3 = LEFTSHIFT
+          R3 = C
+          UP = UP
+          DOWN = DOWN
+          LEFT = LEFT
+          RIGHT = RIGHT
+          GPTK_EOF
+
+          cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" << 'PLACEHOLDER_EOF'
+          Copy your own legally obtained Smokin' Guns .pk3 data files
+          (e.g. sg_pak0.pk3) into this folder before launching the port.
+          PLACEHOLDER_EOF
 
           cat > "$PKG/${PORT_DIR}/port.json" << 'PORTJSON_EOF'
           {
@@ -182,7 +270,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2. No sdl12-compat, no QVM. Cortex-A35 optimized.",
+              "desc": "Native ARM64 build with GL4ES and native SDL 1.2. Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
