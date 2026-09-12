@@ -20,23 +20,19 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 0: MOUNT_DIR explizit setzen (verhindert //ui/-Pfad) ---
-    if not re.search(r'^MOUNT_DIR\s*=\s*code\s*$', content, re.MULTILINE):
-        content = re.sub(
-            r'^(ifndef MOUNT_DIR\s*\nMOUNT_DIR\s*=\s*code\s*\nendif)',
-            r'\1',
-            content,
-            flags=re.MULTILINE
-        )
-    # Sicherstellen, dass MOUNT_DIR nach der Definition nicht ueberschrieben wird
-    content = content.replace('MOUNT_DIR=', 'MOUNT_DIR:=')
+    # --- FIX 0: MOUNT_DIR und Q3UIDIR explizit fixieren ---
+    # Die Makefile definiert MOUNT_DIR nur, wenn es nicht bereits gesetzt ist.
+    # In der Docker-Umgebung kann MOUNT_DIR leer sein, was zu //ui fuehrt.
+    # Wir setzen MOUNT_DIR und Q3UIDIR explizit mit := (sofortige Zuweisung).
+    content = re.sub(
+        r'ifndef MOUNT_DIR\s*\nMOUNT_DIR\s*=\s*code\s*\nendif',
+        'MOUNT_DIR := code\nQ3UIDIR := $(MOUNT_DIR)/ui',
+        content
+    )
+    print("[PATCHED] MOUNT_DIR := code und Q3UIDIR := $(MOUNT_DIR)/ui gesetzt.")
 
     # --- FIX 1: LIB=lib64 fuer ARCH=aarch64 (offizieller ioquake3-Patch) ---
-    # Der offizielle Patch fuegt else ifeq ($(ARCH),aarch64) LIB=lib64 endif
-    # innerhalb des bestehenden else-Zweigs ein.
     if 'ARCH,aarch64' not in content:
-        # Suche nach dem exakten Muster aus der Makefile:
-        # else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif
         old = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
         new = ('else ifeq ($(ARCH),s390x) LIB=lib64 '
                'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
@@ -45,27 +41,11 @@ def patch_makefile():
             content = content.replace(old, new)
             print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
         else:
-            # Fallback: Suche nach der Zeile mit dem LIB-Block
-            pattern = (r'(else ifeq \(\$\(ARCH\),s390x\)\s*\n\s*LIB=lib64\s*\n)'
-                       r'(\s*endif\s*\n\s*endif\s*\n\s*endif\s*\n\s*endif)')
-            replacement = (r'\1else ifeq ($(ARCH),aarch64)\n  LIB=lib64\n\2')
-            content, count = re.subn(pattern, replacement, content)
-            if count > 0:
-                print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (Fallback).")
-            else:
-                print("[WARN] LIB=lib64 fuer aarch64 konnte nicht automatisch eingefuegt werden.")
+            print("[WARN] LIB=lib64 fuer aarch64 konnte nicht eingefuegt werden.")
     else:
         print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
 
-    # --- FIX 2: Q3UIDIR auf UIDIR setzen (verhindert //ui/-Pfad) ---
-    if 'USE_MP_UIDIR' not in content:
-        content = content.replace(
-            'ifndef USE_MP_UIDIR\nQ3UIDIR=$(MOUNT_DIR)/q3_ui\nelse\nQ3UIDIR=$(UIDIR)\nendif',
-            'Q3UIDIR=$(UIDIR)'
-        )
-        print("[PATCHED] Q3UIDIR auf UIDIR gesetzt (verhindert //ui/-Pfad).")
-
-    # --- FIX 3: renderergl2 aus der TARGETS-Variable entfernen ---
+    # --- FIX 2: renderergl2 aus der TARGETS-Variable entfernen ---
     lines = content.splitlines(keepends=True)
     new_lines = []
     for line in lines:
@@ -75,14 +55,14 @@ def patch_makefile():
         new_lines.append(line)
     content = "".join(new_lines)
 
-    # --- FIX 4: rm-Befehle safe machen ---
+    # --- FIX 3: rm-Befehle safe machen ---
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
 
-    # --- FIX 5: python3 erzwingen ---
+    # --- FIX 4: python3 erzwingen ---
     content = content.replace('python ', 'python3 ')
     content = content.replace('python2 ', 'python3 ')
 
-    # --- FIX 6: ARCH_STRING-Konsistenz ---
+    # --- FIX 5: ARCH_STRING-Konsistenz ---
     if not re.search(r'ARCH_STRING\s*=', content):
         content = re.sub(
             r'(ARCH\s*=\s*[^\n]*\n)',
@@ -91,10 +71,10 @@ def patch_makefile():
             count=1
         )
 
-    # --- FIX 7: -O2 durch -O3 ersetzen ---
+    # --- FIX 6: -O2 durch -O3 ersetzen ---
     content = re.sub(r'(?<!\w)-O2(?!\w)', '-O3', content)
 
-    # --- FIX 8: Strikte Warn-Flags entfernen ---
+    # --- FIX 7: Strikte Warn-Flags entfernen ---
     content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
     content = re.sub(r'-Wmaybe-uninitialized', '', content)
     content = re.sub(r'-Wuninitialized', '', content)
@@ -102,7 +82,7 @@ def patch_makefile():
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: MOUNT_DIR fixiert, LIB=lib64, Q3UIDIR korrigiert, renderergl2 deaktiviert.")
+    print("[PATCHED] Makefile: MOUNT_DIR, Q3UIDIR, LIB=lib64, renderergl2 deaktiviert.")
 
 
 def rename_renderergl2_dir():
