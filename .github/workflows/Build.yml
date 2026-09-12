@@ -1,4 +1,4 @@
-name: Create my Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
+name: Fianly Create my Smokin' Guns for RK3326 (PortMaster) - SDL12-Compat ARM64 Build
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-Native-SDL12.zip
+  ZIP_NAME: SmokinGuns-PortMaster-RK3326-SDL12Compat.zip
   PORT_DIR: smokinguns
 
 jobs:
@@ -47,7 +47,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 ccache \
-            libsdl1.2-dev libsdl2-dev \
+            libsdl2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
@@ -86,66 +86,35 @@ jobs:
           cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
 
           # ----------------------------------------------------------------
-          # SDL 1.2 built from source.
-          # Required features:
-          #   --enable-joystick        engine references SDL_JoystickClose
-          #   --enable-video-opengl    engine calls SDL_GL_* + SDL_SetVideoMode(...OPENGL)
-          #   --enable-input-events    /dev/input/event* for joysticks
-          #   --enable-video-fbcon     ONLY viable video driver in SDL 1.2 on RK3326
-          #   --enable-audio-alsa      audio
+          # libsdl1.2-compat (SDL 1.2 API on top of SDL 2.0)
+          # Joystick support is built in – no special flag needed.
+          # KMSDRM works through the SDL2 backend.
           # ----------------------------------------------------------------
           cd /work/src
-          if [ ! -d SDL-1.2 ]; then
-            git clone --depth=1 https://github.com/libsdl-org/SDL-1.2.git
+          if [ ! -d sdl12-compat ]; then
+            git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
           fi
-          cd SDL-1.2
-
-          if [ ! -f configure ]; then
-            chmod +x autogen.sh 2>/dev/null || true
-            ./autogen.sh || autoreconf -fi || true
-          fi
-          [ -f configure ] || { echo "[ERROR] configure was not generated"; exit 1; }
-
-          ./configure \
-            --prefix=/usr \
-            --disable-video-x11 \
-            --enable-video-fbcon \
-            --enable-video-directfb \
-            --disable-video-ps3 \
-            --disable-video-svga \
-            --enable-video-opengl \
-            --disable-audio-oss \
-            --disable-audio-dma \
-            --enable-audio-alsa \
-            --enable-joystick \
-            --enable-input-events \
-            --disable-cdrom \
-            --disable-esd \
-            --disable-nas \
-            --disable-diskaudio \
-            --disable-pulseaudio \
-            --disable-arts \
-            --enable-arm-simd \
-            --enable-shared \
-            --disable-static \
-            CFLAGS="$OPTIMIZE" \
-            LDFLAGS="$LDFLAGS"
-
+          cd sdl12-compat
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
+            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
+            -DCMAKE_C_FLAGS="$OPTIMIZE"
           make -j"$(nproc)"
 
-          SDL12_LIB="$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)"
-          [ -n "$SDL12_LIB" ] || { echo "[ERROR] SDL-1.2 not produced"; exit 1; }
+          SDL12_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
+          [ -n "$SDL12_LIB" ] || { echo "[ERROR] sdl12-compat lib not produced"; exit 1; }
 
-          # Verify that every symbol the engine needs is actually exported.
-          for sym in SDL_JoystickClose SDL_JoystickOpen SDL_GL_SetAttribute \
-                     SDL_GL_GetProcAddress SDL_SetVideoMode SDL_AudioDriverName ; do
-            if ! nm -D --defined-only "$SDL12_LIB" | grep -q " $sym\$" ; then
-              echo "[ERROR] libSDL-1.2.so.0 does not export $sym"
-              exit 1
-            fi
-          done
-          echo "[OK] libSDL-1.2.so.0 exports all required symbols"
+          # Verify the joystick symbol is present.
+          if ! nm -D --defined-only "$SDL12_LIB" | grep -q ' SDL_JoystickClose$' ; then
+            echo "[ERROR] libSDL-1.2.so.0 does not export SDL_JoystickClose"
+            exit 1
+          fi
+          echo "[OK] libSDL-1.2.so.0 exports SDL_JoystickClose"
           cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
+
+          # Also copy the system SDL2 library – sdl12-compat needs it at runtime.
+          cp /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /work/out/libs.aarch64/libSDL2-2.0.so.0
 
           # ----------------------------------------------------------------
           # Smokin' Guns
@@ -173,7 +142,7 @@ jobs:
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
-            CFLAGS="-w -fcommon -I/usr/include/SDL" \
+            CFLAGS="-w -fcommon -I/usr/include/SDL2" \
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
@@ -197,6 +166,7 @@ jobs:
           file /work/out/libs.aarch64/libGL.so.1
           file /work/out/libs.aarch64/libEGL.so.1
           file /work/out/libs.aarch64/libSDL-1.2.so.0
+          file /work/out/libs.aarch64/libSDL2-2.0.so.0
           echo "Build finished successfully."
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
@@ -227,6 +197,7 @@ jobs:
           cp work/out/libs.aarch64/libGL.so.1      "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1     "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
+          cp work/out/libs.aarch64/libSDL2-2.0.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL2-2.0.so.0"
 
           cat > "$PKG/${PORT_DIR}/smokinguns.gptk" << 'GPTK_EOF'
           [ANALOG1]
@@ -274,7 +245,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and native SDL 1.2. Cortex-A35 optimized.",
+              "desc": "Native ARM64 build with GL4ES and SDL1.2-compat (SDL2/KMSDRM backend). Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -286,7 +257,7 @@ jobs:
           cat > "$PKG/Smokin Guns.sh" << 'LAUNCH_EOF'
           #!/bin/bash
           # PortMaster launch script for Smokin' Guns (RK3326 / ArkOS4Clone)
-          # Uses native SDL 1.2 with fbcon video driver.
+          # Uses libsdl1.2-compat (SDL2/KMSDRM backend) with joystick support.
 
           GAMEDIR="/roms/ports/smokinguns"
           LOG_FILE="${GAMEDIR}/debug.log"
@@ -315,9 +286,9 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
-          # Native SDL 1.2 video drivers on RK3326: fbcon only.
-          # kmsdrm does not exist in SDL 1.2 (only SDL 2).
-          export SDL_VIDEODRIVER=fbcon
+          # libsdl1.2-compat uses the SDL2 backend, so the driver must be
+          # the lowercase SDL2 name.
+          export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
           export SDL_JOYSTICK_DEVICE=/dev/input/js0
 
@@ -349,8 +320,8 @@ jobs:
           ls -la "${GAMEDIR}/smokinguns/" 2>&1 || true
           echo "--- libs ---"
           ls -la "${GAMEDIR}/libs.aarch64/" 2>&1 || true
-          echo "--- fb devices ---"
-          ls -la /dev/fb* 2>&1 || true
+          echo "--- drm devices ---"
+          ls -la /dev/dri/ 2>&1 || true
           echo "--- input devices ---"
           ls -la /dev/input/js* /dev/input/event* 2>&1 || true
 
@@ -392,6 +363,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-Native-SDL12
+          name: SmokinGuns-PortMaster-RK3326-SDL12Compat
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
