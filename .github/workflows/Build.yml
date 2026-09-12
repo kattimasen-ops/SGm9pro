@@ -94,7 +94,7 @@ jobs:
           fi
           cd sdl12-compat
 
-          echo "==> Applying sdl12-compat patches (hints + joystick export)..."
+          echo "==> Applying sdl12-compat hint patch..."
           python3 /work/patch_arm64.py
 
           # Verify the hint patch landed in the file
@@ -102,13 +102,11 @@ jobs:
             echo "[ERROR] SDL_HINT_VIDEODRIVER was not patched into SDL12_compat.c"
             exit 1
           fi
-          # Verify the joystick export patch landed
-          if ! grep -q "__attribute__((visibility(\"default\"))) DECLSPEC void SDLCALL SDL_JoystickClose" src/SDL12_compat.c; then
-            echo "[ERROR] Joystick export attribute was not patched into SDL12_compat.c"
-            exit 1
-          fi
 
           mkdir -p build && cd build
+          # -fvisibility=default is the actual fix for exporting all SDL 1.2
+          # symbols (including SDL_JoystickClose) regardless of how they are
+          # declared inside the source files.
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
@@ -120,6 +118,8 @@ jobs:
 
           if ! nm -D --defined-only "$SDL12_LIB" | grep -q ' SDL_JoystickClose$' ; then
             echo "[ERROR] libSDL-1.2.so.0 does not export SDL_JoystickClose"
+            echo "--- exported joystick symbols (if any) ---"
+            nm -D --defined-only "$SDL12_LIB" | grep -i joystick || true
             exit 1
           fi
           echo "[OK] libSDL-1.2.so.0 exports SDL_JoystickClose"
