@@ -115,15 +115,6 @@ jobs:
               print("[DONE] Alle Patches erfolgreich angewendet.")
 
           PY_EOF
-          # WICHTIG: Python braucht Spalte-0-Einrueckung auf oberster Ebene,
-          # das YAML-Heredoc oben schreibt aber jede Zeile mit 10 Leerzeichen
-          # Praefix (damit der YAML-Block gueltig bleibt). Ohne diesen Schritt
-          # wirft python3 sofort "IndentationError: unexpected indent" beim
-          # allerersten Ausfuehren - noch vor jedem anderen Fix.
-          sed -i 's/^          //' work/patch_arm64.py
-          python3 -c "import ast; ast.parse(open('work/patch_arm64.py').read())" \
-            && echo "patch_arm64.py: Python-Syntax OK" \
-            || (echo "patch_arm64.py: Python-Syntax FEHLERHAFT" >&2; exit 1)
 
       - name: Write in-container build script
         run: |
