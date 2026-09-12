@@ -36,17 +36,6 @@ jobs:
           #!/usr/bin/env python3
           import os, sys, re
 
-          def create_makefile_local():
-              content = """# [PATCHED] ARM64 Build-Konfiguration - Wirkung unverifiziert
-          MOUNT_DIR := code
-          Q3UIDIR := $(MOUNT_DIR)/ui
-          ARCH := aarch64
-          COMPILE_ARCH := aarch64
-          """
-              with open("Makefile.local", "w", encoding="utf-8") as f:
-                  f.write(content)
-              print("[PATCHED] Makefile.local erstellt (Wirkung unverifiziert).")
-
           def patch_makefile():
               makefile = "Makefile"
               if not os.path.exists(makefile):
@@ -61,6 +50,11 @@ jobs:
                       print("  Zeile " + str(i) + ": " + line.strip())
               print("[DIAGNOSE] --- Ende ---")
 
+              content = content.replace('//ui/', '/ui/')
+              content = content.replace('//game/', '/game/')
+              content = content.replace('//cgame/', '/cgame/')
+              content = content.replace('//qagame/', '/qagame/')
+
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
               content = content.replace('python ', 'python3 ')
               content = content.replace('python2 ', 'python3 ')
@@ -74,7 +68,7 @@ jobs:
 
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: BUILD_RENDERER_REND2=0, rm -f, python3.")
+              print("[PATCHED] Makefile: Path expansion bugs fixed, BUILD_RENDERER_REND2=0, rm -f, python3.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
@@ -109,7 +103,6 @@ jobs:
               if not os.path.exists("Makefile"):
                   print("[ERROR] Makefile not present.")
                   sys.exit(1)
-              create_makefile_local()
               patch_makefile()
               patch_q_platform()
               print("[DONE] Alle Patches erfolgreich angewendet.")
@@ -150,9 +143,6 @@ jobs:
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
 
-          # =====================================================================
-          # SCHRITT 1: GL4ES bauen
-          # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -166,9 +156,6 @@ jobs:
           cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
           cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
-          # =====================================================================
-          # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
-          # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
             git clone --depth=1 https://github.com/libsdl-org/SDL-1.2.git
@@ -213,12 +200,6 @@ jobs:
 
           cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD):"
-          ls -la /work/out/libs.aarch64/
-
-          # =====================================================================
-          # SCHRITT 3: Smokin' Guns Engine + Native Module bauen
-          # =====================================================================
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
@@ -250,32 +231,16 @@ jobs:
             exit 1
           fi
 
-          echo "==> Inhalt von BUILD_OUT:"
-          ls -la "$BUILD_OUT"
-
           ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
           if [ -z "$ENGINE_BIN" ]; then
             echo "[ERROR] Keine Engine-Binary in $BUILD_OUT gefunden"
             exit 1
           fi
-          echo "==> Engine-Binary erkannt: $ENGINE_BIN"
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          # WICHTIG: Modulnamen werden NICHT mehr umbenannt. Der Renderer
-          # braucht nachweislich den Arch-Suffix im Dateinamen
-          # (renderer_opengl1_aarch64.so) - die Game-Module vermutlich auch.
-          # Statt zu raten, kopieren wir sie unter ihrem echten Namen und
-          # loggen ihn, damit im Debug-Log auf dem Geraet sichtbar wird,
-          # nach welchem Namen die Engine tatsaechlich sucht.
-          echo "==> Native .so-Module (Original-Namen, keine Umbenennung):"
-          find "$BUILD_OUT" -name '*.so' -type f -print
           find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
 
-          echo "==> Finale Spiel-Ausgabe:"
-          ls -la /work/out/game/
-
-          echo "==> Build abgeschlossen!"
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
@@ -300,9 +265,6 @@ jobs:
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
-
-          echo "=== Paketinhalt ==="
-          find "$PKG" -type f | sort
 
           cat > "$PKG/${PORT_DIR}/port.json" <<'PORTJSON_EOF'
           {
@@ -370,9 +332,6 @@ jobs:
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
-          # Zurueck auf kmsdrm - das ist nachweislich auf diesem Geraet
-          # lauffaehig (fruehere Debug-Logs zeigten "SDL using driver KMSDRM").
-          # fbcon passt zudem nicht zu gl4es' GBM/DRM-Backend.
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
