@@ -34,10 +34,10 @@ jobs:
           mkdir -p work
           cat <<'PY_EOF' > work/patch_arm64.py
           #!/usr/bin/env python3
-          import os, sys, re, shutil
+          import os, sys, re
 
           def create_makefile_local():
-              content = """# [PATCHED] ARM64 Build-Konfiguration
+              content = """# [PATCHED] ARM64 Build-Konfiguration - Wirkung unverifiziert
           MOUNT_DIR := code
           Q3UIDIR := $(MOUNT_DIR)/ui
           ARCH := aarch64
@@ -45,7 +45,7 @@ jobs:
           """
               with open("Makefile.local", "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile.local erstellt (MOUNT_DIR, Q3UIDIR, ARCH, COMPILE_ARCH).")
+              print("[PATCHED] Makefile.local erstellt (Wirkung unverifiziert).")
 
           def patch_makefile():
               makefile = "Makefile"
@@ -54,54 +54,29 @@ jobs:
                   sys.exit(1)
               with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
                   content = f.read()
-              # FIX 1: LIB=lib64 fuer aarch64
-              if 'ARCH,aarch64' not in content:
-                  old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
-                  new_lib = (
-                      'else ifeq ($(ARCH),s390x) LIB=lib64 '
-                      'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
-                      'endif endif endif endif'
-                  )
-                  if old_lib in content:
-                      content = content.replace(old_lib, new_lib)
-                      print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt.")
-                  else:
-                      print("[WARN] LIB=lib64 fuer aarch64 konnte nicht eingefuegt werden.")
-              else:
-                  print("[INFO] LIB=lib64 fuer aarch64 bereits vorhanden.")
-              # FIX 2: renderergl2 deaktivieren
-              lines = content.splitlines(keepends=True)
-              new_lines = []
-              for line in lines:
-                  if 'renderer_opengl2' in line or 'renderergl2' in line:
-                      new_lines.append('# [PATCHED] Disabled renderergl2: ' + line)
-                      continue
-                  new_lines.append(line)
-              content = "".join(new_lines)
-              # FIX 3: rm -f
+
+              print("[DIAGNOSE] Zeilen mit 's390x' in der Makefile:")
+              for i, line in enumerate(content.splitlines(), 1):
+                  if 's390x' in line:
+                      print(f"  Zeile {i}: {line.strip()}")
+              print("[DIAGNOSE] --- Ende ---")
+
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
-              # FIX 4: python3
               content = content.replace('python ', 'python3 ')
               content = content.replace('python2 ', 'python3 ')
-              # FIX 5: Warn-Flags
               content = re.sub(r'-Werror[a-zA-Z0-9=-]*', '', content)
               content = re.sub(r'-Wmaybe-uninitialized', '', content)
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
+
+              # REND2 nur ueber die verifizierte Makefile-Variable deaktivieren -
+              # kein Textzeilen-Auskommentieren, kein Verzeichnis-Umbenennen.
+              patch = "\n override CFLAGS += -w -fcommon\n override BUILD_RENDERER_REND2=0\n"
+              content = patch + content
+
               with open(makefile, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("[PATCHED] Makefile: renderergl2 deaktiviert, rm -f, python3.")
-
-          def rename_renderergl2_dir():
-              renderergl2_dir = "code/renderergl2"
-              if os.path.isdir(renderergl2_dir):
-                  backup_dir = "code/renderergl2.disabled"
-                  if os.path.isdir(backup_dir):
-                      shutil.rmtree(backup_dir)
-                  os.rename(renderergl2_dir, backup_dir)
-                  print(f"[PATCHED] {renderergl2_dir} -> {backup_dir} umbenannt.")
-              else:
-                  print(f"[INFO] {renderergl2_dir} existiert nicht, kein Umbenennen noetig.")
+              print("[PATCHED] Makefile: BUILD_RENDERER_REND2=0, rm -f, python3.")
 
           def patch_q_platform():
               path = "code/qcommon/q_platform.h"
@@ -117,32 +92,39 @@ jobs:
               replacement = r'\1#elif defined __aarch64__\n#define ARCH_STRING "aarch64"\n'
               content, count = re.subn(pattern, replacement, content)
               if count > 0:
-                  print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert.")
+                  print("[PATCHED] ARCH_STRING 'aarch64' injiziert (offizieller Patch).")
               else:
                   aarch64_override = (
-                      "/* [PATCHED] ARM64 ARCH_STRING Override */\n"
+                      "/* [PATCHED] ARM64 ARCH_STRING Override (Fallback) */\n"
                       "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
-                      "#ifdef ARCH_STRING\n"
-                      "#undef ARCH_STRING\n"
-                      "#endif\n"
+                      "#ifdef ARCH_STRING\n#undef ARCH_STRING\n#endif\n"
                       "#define ARCH_STRING \"aarch64\"\n"
-                      "#ifndef Q3_LITTLE_ENDIAN\n"
-                      "#define Q3_LITTLE_ENDIAN\n"
-                      "#endif\n"
+                      "#ifndef Q3_LITTLE_ENDIAN\n#define Q3_LITTLE_ENDIAN\n#endif\n"
                       "#endif\n\n"
                   )
                   content = aarch64_override + content
-                  print("[PATCHED] ARCH_STRING 'aarch64' in q_platform.h injiziert (Fallback).")
+                  print("[PATCHED] ARCH_STRING 'aarch64' injiziert (Fallback).")
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
 
           if __name__ == "__main__":
+              if not os.path.exists("Makefile"):
+                  print("[ERROR] Makefile not present.")
+                  sys.exit(1)
               create_makefile_local()
               patch_makefile()
-              rename_renderergl2_dir()
               patch_q_platform()
               print("[DONE] Alle Patches erfolgreich angewendet.")
           PY_EOF
+          # WICHTIG: Python braucht Spalte-0-Einrueckung auf oberster Ebene,
+          # das YAML-Heredoc oben schreibt aber jede Zeile mit 10 Leerzeichen
+          # Praefix (damit der YAML-Block gueltig bleibt). Ohne diesen Schritt
+          # wirft python3 sofort "IndentationError: unexpected indent" beim
+          # allerersten Ausfuehren - noch vor jedem anderen Fix.
+          sed -i 's/^          //' work/patch_arm64.py
+          python3 -c "import ast; ast.parse(open('work/patch_arm64.py').read())" \
+            && echo "patch_arm64.py: Python-Syntax OK" \
+            || (echo "patch_arm64.py: Python-Syntax FEHLERHAFT" >&2; exit 1)
 
       - name: Write in-container build script
         run: |
@@ -257,12 +239,12 @@ jobs:
           echo "==> Alte Artefakte bereinigen..."
           rm -rf build/release-linux-aarch64/ || true
 
-          echo "==> Smokin' Guns kompilieren (OHNE renderergl2, NUR native Module)..."
+          echo "==> Smokin' Guns kompilieren (native Module, REND2 aus)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             MOUNT_DIR=code \
             CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
-            BUILD_RENDERER_OPENGL2=0 \
+            BUILD_RENDERER_REND2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
@@ -290,32 +272,18 @@ jobs:
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          echo "==> Native .so-Module suchen..."
+          # WICHTIG: Modulnamen werden NICHT mehr umbenannt. Der Renderer
+          # braucht nachweislich den Arch-Suffix im Dateinamen
+          # (renderer_opengl1_aarch64.so) - die Game-Module vermutlich auch.
+          # Statt zu raten, kopieren wir sie unter ihrem echten Namen und
+          # loggen ihn, damit im Debug-Log auf dem Geraet sichtbar wird,
+          # nach welchem Namen die Engine tatsaechlich sucht.
+          echo "==> Native .so-Module (Original-Namen, keine Umbenennung):"
           find "$BUILD_OUT" -name '*.so' -type f -print
           find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
 
-          # Modulnamen normalisieren (Architektur-Suffix entfernen)
-          cd /work/out/game
-          for mod in cgame qagame ui; do
-            for f in ${mod}*.so; do
-              if [ -f "$f" ] && [ "$f" != "${mod}.so" ]; then
-                mv "$f" "${mod}.so"
-                echo "[PROACTIVE] $f -> ${mod}.so umbenannt"
-              fi
-            done
-          done
-          cd /work
-
           echo "==> Finale Spiel-Ausgabe:"
           ls -la /work/out/game/
-
-          for mod in cgame qagame ui; do
-            if ls /work/out/game/${mod}.so 1>/dev/null 2>&1; then
-              echo "  [OK] ${mod}.so gefunden"
-            else
-              echo "  [WARN] ${mod}.so NICHT gefunden!"
-            fi
-          done
 
           echo "==> Build abgeschlossen!"
           BUILD_SCRIPT_EOF
@@ -355,7 +323,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and NATIVE SDL 1.2. No sdl12-compat, no QVM, no renderergl2. Cortex-A35 optimized.",
+              "desc": "Native ARM64 build with GL4ES and native SDL 1.2. No QVM, no REND2. Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -385,6 +353,8 @@ jobs:
               source "${controlfolder}/control.txt"
               [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
               get_controls
+          else
+              echo "ERROR: ${controlfolder}/control.txt not found." >&2
           fi
 
           cd "$GAMEDIR" || exit 1
@@ -392,34 +362,29 @@ jobs:
           mkdir -p "${GAMEDIR}/.smokinguns"
 
           echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null || true
-          echo 1512000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
-
-          echo 10 > /proc/sys/vm/swappiness 2>/dev/null || true
-          echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null || true
+          echo 10 | $ESUDO tee /proc/sys/vm/swappiness 2>/dev/null || true
+          echo 1 | $ESUDO tee /proc/sys/vm/overcommit_memory 2>/dev/null || true
 
           export LIBGL_ES=2
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
           export LIBGL_FB=1
-          export LIBGL_FBO=0
+          export LIBGL_FBO=640x480
           export LIBGL_NOERROR=1
           export LIBGL_FORCE16BITS=1
           export LIBGL_BATCH=100
-          export LIBGL_BEGINEND=2
           export LIBGL_FASTMATH=1
           export LIBGL_NOBANNER=1
           export LIBGL_VSYNC=0
-          export LIBGL_SILENTSTUB=1
           export LIBGL_XREFRESH=0
-          export LIBGL_RECYCLEFBO=1
           export LIBGL_MIPMAP=5
           export LIBGL_SHRINK=8
 
-          export SDL_VIDEODRIVER=fbcon
+          # Zurueck auf kmsdrm - das ist nachweislich auf diesem Geraet
+          # lauffaehig (fruehere Debug-Logs zeigten "SDL using driver KMSDRM").
+          # fbcon passt zudem nicht zu gl4es' GBM/DRM-Backend.
+          export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
-          export SDL_FBDEV=/dev/fb0
-          export SDL_VIDEO_FBCON_NOWINDOW=1
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
@@ -434,6 +399,7 @@ jobs:
             +set vm_game 0 \
             +set vm_ui 0 \
             +set s_useOpenAL 0 \
+            +set r_mode -1 \
             +set r_customwidth 640 \
             +set r_customheight 480 \
             +set r_fullscreen 1 \
@@ -446,6 +412,7 @@ jobs:
           $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null || true
           $ESUDO setterm -cursor on > /dev/tty1 2>/dev/null || true
           printf "\033c" > /dev/tty1 2>/dev/null || true
+          echo "Game exited cleanly."
           exit 0
           LAUNCH_EOF
           chmod +x "$PKG/Smokin Guns.sh"
