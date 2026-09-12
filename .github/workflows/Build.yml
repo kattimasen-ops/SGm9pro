@@ -146,7 +146,6 @@ jobs:
 
           echo "==> Smokin' Guns kompilieren (NUR native Module, OHNE QVM)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
-            MOUNT_DIR=code \
             CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
