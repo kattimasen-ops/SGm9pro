@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Patch Smokin' Guns for ARM64 (aarch64) cross-compilation,
-and patch sdl12-compat for older SDL2 headers.
+Patch Smokin' Guns for ARM64 / SDL1.2-compat on RK3326.
 
 Can be invoked from either:
   - the SmokinGuns source root (patches Makefile + q_platform.h), or
@@ -112,7 +111,15 @@ def patch_q_platform():
 
 def patch_sdl12_compat():
     """Define SDL_HINT_VIDEODRIVER and SDL_HINT_AUDIODRIVER for SDL2 < 2.0.22.
-    Ubuntu 20.04 ships SDL 2.0.10, which lacks these hints.
+
+    Ubuntu 20.04 ships SDL 2.0.10, which lacks these hints.  They were only
+    formalised as SDL_HINT_* macros in SDL 2.0.22.
+
+    IMPORTANT: the definitions must be inserted at the very top of the file,
+    before any #include or code.  Inserting them after the last #include does
+    NOT work: SDL12_compat.c is ~3000 lines long and contains additional
+    includes further down, so "after the last include" lands *after* the
+    first use of SDL_HINT_VIDEODRIVER and the compiler still fails.
     """
     path = os.path.join("src", "SDL12_compat.c")
     if not os.path.exists(path):
@@ -126,17 +133,10 @@ def patch_sdl12_compat():
         print("[INFO] sdl12-compat already patched")
         return True
 
-    includes = list(re.finditer(r'^#include\s+.*$', content, re.MULTILINE))
-    if not includes:
-        print("[WARN] no #include found in SDL12_compat.c")
-        return False
-
-    insert_pos = includes[-1].end()
     patch = (
-        "\n\n"
         "/* [PATCHED] Define SDL_HINT_VIDEODRIVER and SDL_HINT_AUDIODRIVER\n"
         " * for SDL2 versions older than 2.0.22 where these hints were not\n"
-        " * yet formalised.  They were introduced as full hints in SDL 2.0.22.\n"
+        " * yet formalised as macros.\n"
         " */\n"
         "#ifndef SDL_HINT_VIDEODRIVER\n"
         "#define SDL_HINT_VIDEODRIVER \"SDL_VIDEODRIVER\"\n"
@@ -144,18 +144,19 @@ def patch_sdl12_compat():
         "#ifndef SDL_HINT_AUDIODRIVER\n"
         "#define SDL_HINT_AUDIODRIVER \"SDL_AUDIODRIVER\"\n"
         "#endif\n"
+        "\n"
     )
-    content = content[:insert_pos] + patch + content[insert_pos:]
+
+    # Prepend at the very top of the file, before everything else.
+    content = patch + content
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined")
+    print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined at top of file")
     return True
 
 
-if __name__ == "__main__":
-    # Detect which source tree we're in and act accordingly.  Do not fail
-    # just because the other tree's files aren't present.
+def main():
     is_smokinguns = os.path.exists("Makefile")
     is_sdl12_compat = os.path.exists(os.path.join("src", "SDL12_compat.c"))
 
@@ -179,3 +180,7 @@ if __name__ == "__main__":
 
     print(f"[DONE] {applied} patch group(s) applied.")
     sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
