@@ -1,4 +1,4 @@
-name: Create Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
+name: Create my Smokin' Guns for RK3326 (PortMaster) - Native ARM64 Build
 
 on:
   workflow_dispatch:
@@ -65,9 +65,6 @@ jobs:
           tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           export PATH="/opt/cmake/bin:$PATH"
 
-          # =====================================================================
-          # SCHRITT 1: GL4ES bauen
-          # =====================================================================
           cd /work/src
           if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
           cd gl4es
@@ -81,9 +78,6 @@ jobs:
           cp "$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)" /work/out/libs.aarch64/libGL.so.1
           cp "$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)" /work/out/libs.aarch64/libEGL.so.1
 
-          # =====================================================================
-          # SCHRITT 2: NATIVE SDL 1.2 Bibliothek fuer ARM64 bauen
-          # =====================================================================
           cd /work/src
           if [ ! -d SDL-1.2 ]; then
             git clone --depth=1 https://github.com/libsdl-org/SDL-1.2.git
@@ -125,26 +119,15 @@ jobs:
             LDFLAGS="$LDFLAGS"
 
           make -j"$(nproc)"
-
           cp "$(find /work/src/SDL-1.2 -name 'libSDL-1.2.so.0*' -print -quit)" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          echo "==> Native SDL 1.2 Bibliothek gebaut (mit ARM SIMD):"
-          ls -la /work/out/libs.aarch64/
-
-          # =====================================================================
-          # SCHRITT 3: Smokin' Guns Engine + Native Module bauen
-          # =====================================================================
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
-          echo "==> Patch-Skript ausfuehren..."
           python3 /work/patch_arm64.py
-
-          echo "==> Alte Artefakte bereinigen..."
           rm -rf build/release-linux-aarch64/ || true
 
-          echo "==> Smokin' Guns kompilieren (NUR native Module, OHNE QVM)..."
           make release -j1 PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             CC="$CC" \
             BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
@@ -155,43 +138,16 @@ jobs:
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          echo "==> Build-Ausgabe: $BUILD_OUT"
-
-          if [ -z "$BUILD_OUT" ] || [ ! -d "$BUILD_OUT" ]; then
-            echo "[ERROR] Build-Ausgabeverzeichnis nicht gefunden!"
-            find /work/src/SmokinGuns/build -maxdepth 2 -type d 2>/dev/null || true
+          if [ -z "$BUILD_OUT" ]; then
+            echo "[ERROR] Build failed. Check diagnostic dump above for Makefile definitions."
             exit 1
           fi
-
-          echo "==> Inhalt von BUILD_OUT:"
-          ls -la "$BUILD_OUT"
 
           ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
-          if [ -z "$ENGINE_BIN" ]; then
-            echo "[ERROR] Keine Engine-Binary in $BUILD_OUT gefunden"
-            exit 1
-          fi
-          echo "==> Engine-Binary erkannt: $ENGINE_BIN"
           cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
           chmod +x /work/out/game/smokinguns.aarch64
 
-          echo "==> Native .so-Module suchen..."
-          find "$BUILD_OUT" -name '*.so' -type f -print
           find "$BUILD_OUT" -name '*.so' -type f -exec cp {} /work/out/game/ \;
-
-          echo "==> Finale Spiel-Ausgabe (NICHT umbenennen – Engine erwartet Arch-Suffix):"
-          ls -la /work/out/game/
-
-          for mod in cgame qagame ui; do
-            if ls /work/out/game/${mod}*.so 1>/dev/null 2>&1; then
-              echo "  [OK] ${mod}*.so gefunden:"
-              ls /work/out/game/${mod}*.so
-            else
-              echo "  [WARN] ${mod}*.so NICHT gefunden!"
-            fi
-          done
-
-          echo "==> Build abgeschlossen!"
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
 
@@ -216,9 +172,6 @@ jobs:
           cp work/out/libs.aarch64/libGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
           cp work/out/libs.aarch64/libEGL.so.1 "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
           cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
-
-          echo "=== Paketinhalt ==="
-          find "$PKG" -type f | sort
 
           cat > "$PKG/${PORT_DIR}/port.json" << 'PORTJSON_EOF'
           {
