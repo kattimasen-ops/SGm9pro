@@ -58,7 +58,7 @@ jobs:
               print("[DIAGNOSE] Zeilen mit 's390x' in der Makefile:")
               for i, line in enumerate(content.splitlines(), 1):
                   if 's390x' in line:
-                      print(f"  Zeile {i}: {line.strip()}")
+                      print("  Zeile " + str(i) + ": " + line.strip())
               print("[DIAGNOSE] --- Ende ---")
 
               content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
@@ -69,9 +69,7 @@ jobs:
               content = re.sub(r'-Wuninitialized', '', content)
               content = re.sub(r'-Wstrict-overflow', '', content)
 
-              # REND2 nur ueber die verifizierte Makefile-Variable deaktivieren -
-              # kein Textzeilen-Auskommentieren, kein Verzeichnis-Umbenennen.
-              patch = "\n override CFLAGS += -w -fcommon\n override BUILD_RENDERER_REND2=0\n"
+              patch = "\noverride CFLAGS += -w -fcommon\noverride BUILD_RENDERER_REND2=0\n"
               content = patch + content
 
               with open(makefile, "w", encoding="utf-8") as f:
@@ -115,6 +113,7 @@ jobs:
               patch_makefile()
               patch_q_platform()
               print("[DONE] Alle Patches erfolgreich angewendet.")
+
           PY_EOF
           # WICHTIG: Python braucht Spalte-0-Einrueckung auf oberster Ebene,
           # das YAML-Heredoc oben schreibt aber jede Zeile mit 10 Leerzeichen
