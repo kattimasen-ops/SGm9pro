@@ -20,34 +20,47 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # --- FIX 0: MOUNT_DIR unbedingt auf code setzen ---
-    # Die Makefile definiert MOUNT_DIR nur, wenn es NICHT definiert ist.
-    # In der Docker-Umgebung ist MOUNT_DIR als leere Umgebungsvariable vorhanden,
+    # --- FIX 0: MOUNT_DIR unbedingt auf code setzen (nicht ifndef) ---
+    # Die Makefile definiert MOUNT_DIR nur, wenn es nicht definiert ist.
+    # In der Docker-Umgebung ist MOUNT_DIR als leere Variable definiert,
     # wodurch ifndef fehlschlaegt und MOUNT_DIR leer bleibt.
-    # Wir ersetzen 'MOUNT_DIR=code' durch 'MOUNT_DIR:=code' (sofortige Zuweisung).
-    content = content.replace('MOUNT_DIR=code', 'MOUNT_DIR:=code')
-    print("[PATCHED] MOUNT_DIR:=code gesetzt (sofortige Zuweisung).")
+    # Wir ersetzen den gesamten ifndef-Block durch eine unbedingte Zuweisung.
+    content = content.replace(
+        'ifndef MOUNT_DIR\nMOUNT_DIR=code\nendif',
+        'MOUNT_DIR:=code'
+    )
+    print("[PATCHED] MOUNT_DIR:=code (unbedingt, ueberschreibt leere Umgebungsvariable).")
 
-    # --- FIX 1: Q3UIDIR explizit auf $(MOUNT_DIR)/ui setzen ---
-    # Die Makefile definiert Q3UIDIR ueber eine ifndef/else-Verzweigung.
-    # Wir umgehen diese Verzweigung, um //ui-Pfade zu vermeiden.
-    old_q3uidir = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
+    # --- FIX 1: Q3UIDIR direkt auf $(MOUNT_DIR)/ui setzen ---
+    # Die Makefile hat eine ifndef/else-Verzweigung fuer Q3UIDIR.
+    # Wir umgehen diese Verzweigung komplett.
+    old_q3uidir = (
+        'ifndef USE_MP_UIDIR\n'
+        'Q3UIDIR=$(MOUNT_DIR)/q3_ui\n'
+        'else\n'
+        'Q3UIDIR=$(UIDIR)\n'
+        'endif'
+    )
     if old_q3uidir in content:
         content = content.replace(old_q3uidir, 'Q3UIDIR=$(MOUNT_DIR)/ui')
-        print("[PATCHED] Q3UIDIR explizit auf $(MOUNT_DIR)/ui gesetzt.")
+        print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt.")
     else:
-        print("[INFO] Q3UIDIR-Verzweigung nicht gefunden, keine Aenderung noetig.")
+        # Fallback: Suche nach der einzeiligen Version
+        old_q3uidir_one = 'ifndef USE_MP_UIDIR Q3UIDIR=$(MOUNT_DIR)/q3_ui else Q3UIDIR=$(UIDIR) endif'
+        if old_q3uidir_one in content:
+            content = content.replace(old_q3uidir_one, 'Q3UIDIR=$(MOUNT_DIR)/ui')
+            print("[PATCHED] Q3UIDIR direkt auf $(MOUNT_DIR)/ui gesetzt (einzeilig).")
+        else:
+            print("[INFO] Q3UIDIR-Verzweigung nicht gefunden, keine Aenderung noetig.")
 
     # --- FIX 2: LIB=lib64 fuer ARCH=aarch64 (offizieller ioquake3-Patch) ---
-    # Die Makefile hat den LIB-Block in einer einzigen Zeile:
-    # else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif
-    # Der offizielle Patch fuegt else ifeq ($(ARCH),aarch64) LIB=lib64
-    # direkt nach dem s390x-Block ein und ein weiteres endif am Ende.
     if 'ARCH,aarch64' not in content:
         old_lib = 'else ifeq ($(ARCH),s390x) LIB=lib64 endif endif endif endif'
-        new_lib = ('else ifeq ($(ARCH),s390x) LIB=lib64 '
-                   'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
-                   'endif endif endif endif')
+        new_lib = (
+            'else ifeq ($(ARCH),s390x) LIB=lib64 '
+            'else ifeq ($(ARCH),aarch64) LIB=lib64 endif '
+            'endif endif endif endif'
+        )
         if old_lib in content:
             content = content.replace(old_lib, new_lib)
             print("[PATCHED] LIB=lib64 fuer aarch64 hinzugefuegt (offizieller Patch).")
