@@ -2,6 +2,10 @@
 """
 Patch Smokin' Guns for ARM64 (aarch64) cross-compilation,
 and patch sdl12-compat for older SDL2 headers.
+
+Can be invoked from either:
+  - the SmokinGuns source root (patches Makefile + q_platform.h), or
+  - the sdl12-compat source root (patches SDL12_compat.c).
 """
 
 import os
@@ -26,8 +30,8 @@ def diagnostic_dump():
 def patch_makefile():
     makefile = "Makefile"
     if not os.path.exists(makefile):
-        print(f"[ERROR] {makefile} not found!")
-        sys.exit(1)
+        print(f"[WARN] {makefile} not found - skipping")
+        return False
 
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
@@ -53,10 +57,15 @@ def patch_makefile():
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
     print("[PATCHED] Makefile: hygiene")
+    return True
 
 
 def patch_q_platform():
     patched = 0
+    if not os.path.isdir("code"):
+        print("[WARN] code/ not found - skipping q_platform.h patches")
+        return 0
+
     for root, _dirs, files in os.walk("code"):
         for name in files:
             if name != "q_platform.h":
@@ -98,31 +107,29 @@ def patch_q_platform():
                 print(f"[PATCHED] {path}")
 
     print(f"[INFO] {patched} q_platform.h file(s) patched")
+    return patched
 
 
 def patch_sdl12_compat():
-    """Patch sdl12-compat to define SDL_HINT_VIDEODRIVER and
-    SDL_HINT_AUDIODRIVER for SDL2 < 2.0.22.
-    See https://github.com/libsdl-org/sdl12-compat/issues/324
+    """Define SDL_HINT_VIDEODRIVER and SDL_HINT_AUDIODRIVER for SDL2 < 2.0.22.
+    Ubuntu 20.04 ships SDL 2.0.10, which lacks these hints.
     """
-    path = "src/SDL12_compat.c"
+    path = os.path.join("src", "SDL12_compat.c")
     if not os.path.exists(path):
         print(f"[WARN] {path} not found - skipping sdl12-compat patch")
-        return
+        return False
 
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
     if "#ifndef SDL_HINT_VIDEODRIVER" in content:
         print("[INFO] sdl12-compat already patched")
-        return
+        return True
 
-    # Insert right after the last #include line, before any code.
-    # Find the include block and append after it.
     includes = list(re.finditer(r'^#include\s+.*$', content, re.MULTILINE))
     if not includes:
         print("[WARN] no #include found in SDL12_compat.c")
-        return
+        return False
 
     insert_pos = includes[-1].end()
     patch = (
@@ -143,18 +150,32 @@ def patch_sdl12_compat():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined")
+    return True
 
 
 if __name__ == "__main__":
-    if not os.path.exists("Makefile"):
-        print("[ERROR] Must be run from the SmokinGuns source root for patch_makefile/patch_q_platform.")
-        # Still try sdl12-compat patch if the file exists
-        if os.path.exists("src/SDL12_compat.c"):
-            patch_sdl12_compat()
+    # Detect which source tree we're in and act accordingly.  Do not fail
+    # just because the other tree's files aren't present.
+    is_smokinguns = os.path.exists("Makefile")
+    is_sdl12_compat = os.path.exists(os.path.join("src", "SDL12_compat.c"))
+
+    if not is_smokinguns and not is_sdl12_compat:
+        print("[ERROR] Not in SmokinGuns or sdl12-compat source tree.")
         sys.exit(1)
 
-    diagnostic_dump()
-    patch_makefile()
-    patch_q_platform()
-    patch_sdl12_compat()
-    print("[DONE] All patches applied.")
+    applied = 0
+
+    if is_smokinguns:
+        print("==> Patching SmokinGuns")
+        diagnostic_dump()
+        if patch_makefile():
+            applied += 1
+        patch_q_platform()
+
+    if is_sdl12_compat:
+        print("==> Patching sdl12-compat")
+        if patch_sdl12_compat():
+            applied += 1
+
+    print(f"[DONE] {applied} patch group(s) applied.")
+    sys.exit(0)
