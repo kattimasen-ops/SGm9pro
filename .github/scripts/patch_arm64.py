@@ -4,13 +4,11 @@ Patch Smokin' Guns for ARM64 / SDL1.2-compat on RK3326.
 
 This script can be invoked from either:
   - the SmokinGuns source root (patches Makefile + q_platform.h), or
-  - the sdl12-compat source root (patches SDL12_compat.c).
+  - the sdl12-compat source root (patches SDL_HINT_* fallbacks).
 
-It applies:
-  1. ARM64 architecture patches (q_platform.h)
-  2. Makefile fixes (BASENAME typo, SDL2 paths)
-  3. SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER fallbacks for SDL2 < 2.0.22
-  4. Joystick symbol export attributes for sdl12-compat
+Symbol visibility for sdl12-compat is NOT patched here. It is controlled
+by passing -fvisibility=default to the CMake build, which is the
+reliable way to export every symbol regardless of declaration style.
 """
 
 import os
@@ -121,10 +119,9 @@ def patch_sdl12_compat_hints():
     Ubuntu 20.04 ships SDL 2.0.10, which lacks these hints. They were only
     formalised as SDL_HINT_* macros in SDL 2.0.22.
 
-    IMPORTANT: the definitions must be inserted at the very top of the file,
-    before any #include or code. Inserting them after the last #include does
-    NOT work: SDL12_compat.c is ~3000 lines long and contains additional
-    includes further down.
+    The definitions are inserted at the very top of the file, before any
+    #include or code. This is safe because the file does not define these
+    macros itself and the guards prevent duplicate definitions.
     """
     path = os.path.join("src", "SDL12_compat.c")
     if not os.path.exists(path):
@@ -156,107 +153,8 @@ def patch_sdl12_compat_hints():
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined at top of file")
+    print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined")
     return True
-
-
-def patch_sdl12_compat_joystick_export():
-    """Ensure joystick symbols are exported from libSDL-1.2.so.0.
-
-    By default, sdl12-compat does not set a visibility policy, which
-    means the symbols may be hidden if the build environment uses
-    -fvisibility=hidden. This function adds __attribute__((visibility("default")))
-    to the declarations of the joystick functions that ioquake3 needs.
-    """
-    path = os.path.join("src", "SDL12_compat.c")
-    if not os.path.exists(path):
-        print(f"[WARN] {path} not found - skipping joystick export patch")
-        return False
-
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
-
-    if "__attribute__((visibility(\"default\"))) DECLSPEC void SDLCALL SDL_JoystickClose" in content:
-        print("[INFO] sdl12-compat joystick export patch already applied")
-        return True
-
-    joystick_funcs = [
-        "SDL_JoystickClose",
-        "SDL_JoystickOpen",
-        "SDL_NumJoysticks",
-        "SDL_JoystickName",
-        "SDL_JoystickNumAxes",
-        "SDL_JoystickNumButtons",
-        "SDL_JoystickNumHats",
-        "SDL_JoystickNumBalls",
-        "SDL_JoystickUpdate",
-        "SDL_JoystickEventState",
-        "SDL_JoystickGetAxis",
-        "SDL_JoystickGetHat",
-        "SDL_JoystickGetButton",
-        "SDL_JoystickGetBall",
-    ]
-
-    patched = False
-    for func in joystick_funcs:
-        # Match the declaration line and add visibility attribute
-        old = f"DECLSPEC void SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC void SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-        old = f"DECLSPEC SDL_Joystick * SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC SDL_Joystick * SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-        old = f"DECLSPEC const char * SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC const char * SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-        old = f"DECLSPEC int SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC int SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-        old = f"DECLSPEC Uint8 SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC Uint8 SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-        old = f"DECLSPEC Sint16 SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC Sint16 SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-        old = f"DECLSPEC SDL_bool SDLCALL {func}("
-        new = f'__attribute__((visibility("default"))) DECLSPEC SDL_bool SDLCALL {func}('
-        if old in content:
-            content = content.replace(old, new)
-            patched = True
-            print(f"[PATCHED] sdl12-compat: exported {func}")
-
-    if patched:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        print("[PATCHED] sdl12-compat: joystick symbol export patch applied")
-    else:
-        print("[WARN] sdl12-compat: no joystick declarations found to patch")
-
-    return patched
 
 
 def main():
@@ -279,8 +177,6 @@ def main():
     if is_sdl12_compat:
         print("==> Patching sdl12-compat")
         if patch_sdl12_compat_hints():
-            applied += 1
-        if patch_sdl12_compat_joystick_export():
             applied += 1
 
     print(f"[DONE] {applied} patch group(s) applied.")
