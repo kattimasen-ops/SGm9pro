@@ -1,22 +1,12 @@
 #!/usr/bin/env python3
 import os, sys, re
 
-def create_makefile_local():
-    content = """# [PATCHED] ARM64 Build-Konfiguration - Wirkung unverifiziert
-MOUNT_DIR := code
-Q3UIDIR := $(MOUNT_DIR)/ui
-ARCH := aarch64
-COMPILE_ARCH := aarch64
-"""
-    with open("Makefile.local", "w", encoding="utf-8") as f:
-        f.write(content)
-    print("[PATCHED] Makefile.local erstellt (Wirkung unverifiziert).")
-
 def patch_makefile():
     makefile = "Makefile"
     if not os.path.exists(makefile):
         print(f"[ERROR] {makefile} not found!")
         sys.exit(1)
+    
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
@@ -26,6 +16,13 @@ def patch_makefile():
             print("  Zeile " + str(i) + ": " + line.strip())
     print("[DIAGNOSE] --- Ende ---")
 
+    # Bug 2 Fix: Sanitize path expansion double-slashes that break Make targets
+    content = content.replace('//ui/', '/ui/')
+    content = content.replace('//game/', '/game/')
+    content = content.replace('//cgame/', '/cgame/')
+    content = content.replace('//qagame/', '/qagame/')
+
+    # Standard fixes
     content = re.sub(r'\brm\s+(?!-)', 'rm -f ', content)
     content = content.replace('python ', 'python3 ')
     content = content.replace('python2 ', 'python3 ')
@@ -39,7 +36,7 @@ def patch_makefile():
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: BUILD_RENDERER_REND2=0, rm -f, python3.")
+    print("[PATCHED] Makefile: Path expansion bugs fixed, BUILD_RENDERER_REND2=0, rm -f, python3.")
 
 def patch_q_platform():
     path = "code/qcommon/q_platform.h"
@@ -48,12 +45,15 @@ def patch_q_platform():
         sys.exit(1)
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
+    
     if re.search(r'ARCH_STRING\s+"aarch64"', content):
         print("[INFO] q_platform.h bereits gepatcht.")
         return
+        
     pattern = r'(#elif defined __arm__\s*\n#define ARCH_STRING "arm"\s*\n)'
     replacement = r'\1#elif defined __aarch64__\n#define ARCH_STRING "aarch64"\n'
     content, count = re.subn(pattern, replacement, content)
+    
     if count > 0:
         print("[PATCHED] ARCH_STRING 'aarch64' injiziert (offizieller Patch).")
     else:
@@ -67,6 +67,7 @@ def patch_q_platform():
         )
         content = aarch64_override + content
         print("[PATCHED] ARCH_STRING 'aarch64' injiziert (Fallback).")
+        
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -74,7 +75,7 @@ if __name__ == "__main__":
     if not os.path.exists("Makefile"):
         print("[ERROR] Makefile not present.")
         sys.exit(1)
-    create_makefile_local()
+    # create_makefile_local() explicitly disabled to fix variable evaluation order
     patch_makefile()
     patch_q_platform()
     print("[DONE] Alle Patches erfolgreich angewendet.")
