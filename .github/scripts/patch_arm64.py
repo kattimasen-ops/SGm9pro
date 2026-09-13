@@ -41,66 +41,61 @@ class DirectoryParser(html.parser.HTMLParser):
 
 
 # ===========================================================================
-# Makefile patch
+# Makefile patch (SAFE - no ifeq/endif blocks)
 # ===========================================================================
 
 def patch_makefile(filepath="Makefile"):
-    """Patch Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, fmt fallback, ARCH_STRING."""
+    """
+    Patch Makefile safely:
+      - ARCH, BUILD_GAME_SO, BUILD_GAME_QVM
+      - WIDTH single-line replacement (no ifeq/endif to avoid syntax breakage)
+      - ARCH_STRING via CFLAGS
+    """
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
         return False
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
-    content = re.sub(r'ARCH\s*\?=\s*.*', 'ARCH ?= aarch64', content)
-    content = re.sub(r'BUILD_GAME_SO\s*\?=\s*.*', 'BUILD_GAME_SO ?= 1', content)
-    content = re.sub(r'BUILD_GAME_QVM\s*\?=\s*.*', 'BUILD_GAME_QVM ?= 0', content)
+    # Force ARCH values
+    content = re.sub(r'^ARCH\s*\?=\s*.*$',
+                     'ARCH ?= aarch64', content, flags=re.MULTILINE)
+    content = re.sub(r'^BUILD_GAME_SO\s*\?=\s*.*$',
+                     'BUILD_GAME_SO ?= 1', content, flags=re.MULTILINE)
+    content = re.sub(r'^BUILD_GAME_QVM\s*\?=\s*.*$',
+                     'BUILD_GAME_QVM ?= 0', content, flags=re.MULTILINE)
 
-    # Fix fmt width fallback (tput returns nothing in Docker)
-    if 'FALLBACK_WIDTH' not in content:
+    # Safe WIDTH patch: single-line replacement only. No ifeq/endif block.
+    # This just adds a fallback so tput doesn't return an empty string.
+    content = re.sub(
+        r'WIDTH\s*:=\s*\$\(shell\s+tput\s+cols[^\)]*\)',
+        'WIDTH := $(shell tput cols 2>/dev/null || echo 80)',
+        content
+    )
+
+    # Pass ARCH_STRING to the compiler via CFLAGS (ioquake3 recommended way)
+    if '-DARCH_STRING=' not in content:
         content = re.sub(
-            r'(WIDTH\s*:=\s*).*?\n',
-            r'\1$(shell tput cols 2>/dev/null || echo 80)\n',
-            content, count=1
-        )
-        content = content.replace(
-            'WIDTH := $(shell tput cols 2>/dev/null || echo 80)',
-            'WIDTH := $(shell tput cols 2>/dev/null)\n'
-            'ifeq ($(WIDTH),)\n'
-            '  WIDTH := 80\n'
-            'endif'
-        )
-
-    # Ensure FILE_ARCH is defined for aarch64
-    if 'FILE_ARCH' not in content:
-        content = content.replace(
-            'ifeq ($(ARCH),aarch64)',
-            'ifeq ($(ARCH),aarch64)\n'
-            '  FILE_ARCH = aarch64'
-        )
-
-    # Force ARCH_STRING to be passed via CFLAGS (ioquake3 recommended way)
-    if 'ARCH_STRING' not in content:
-        content = re.sub(
-            r'(CFLAGS\s*\+?=\s*)',
-            r'\1-DARCH_STRING=\\"$(ARCH)\\" ',
-            content, count=1
+            r'^(CFLAGS\s*\+=)',
+            r'\1 -DARCH_STRING=\\"$(ARCH)\\"',
+            content, count=1, flags=re.MULTILINE
         )
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
-    print("[PATCHED] Makefile: ARCH=aarch64, BUILD_GAME_SO=1, BUILD_GAME_QVM=0, ARCH_STRING, fmt fallback")
+    print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, WIDTH, ARCH_STRING")
     return True
 
 
 # ===========================================================================
-# q_platform.h patch (robust fallback)
+# q_platform.h patch (top-level fallback)
 # ===========================================================================
 
 def patch_q_platform(filepath="code/qcommon/q_platform.h"):
     """
     Add AArch64 fallback defines to q_platform.h.
-    The Makefile passes -DARCH_STRING=\"aarch64\", this is only a safety net.
+    Inserted right after the include guard so it applies to both
+    architecture chains (ARCH_STRING and CPUSTRING/endianness).
     """
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
@@ -192,7 +187,7 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
 
 
 # ===========================================================================
-# SIMD loop injection (robust, pattern-based)
+# SIMD loop injection (only bg_pmove.c; tr_mesh.c pattern too variable)
 # ===========================================================================
 
 def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
@@ -209,7 +204,7 @@ def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
 
     match = re.search(pattern, content)
     if not match:
-        print(f"[WARN] Pattern not found in {filepath} ({description}) - skipping.")
+        print(f"[INFO] Pattern not found in {filepath} ({description}) - skipping.")
         return
 
     insert_pos = match.start()
@@ -223,28 +218,15 @@ def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
 
 def find_and_patch_simd_loops():
     """
-    Locate the hot loops in tr_mesh.c and bg_pmove.c and inject SIMD pragmas.
-    Uses glob-based discovery + flexible regex to survive code variations.
+    Inject SIMD pragma only into the bg_pmove.c touch loop, which has a
+    stable pattern. The tr_mesh.c vertex loop uses several formatting
+    variants across renderergl1/renderergl2/renderer; we skip it to
+    avoid fragile matching.
     """
-    # ---- tr_mesh.c : vertex transformation loop ----
-    tr_mesh_candidates = glob.glob("code/**/tr_mesh.c", recursive=True)
-    if tr_mesh_candidates:
-        tr_mesh = tr_mesh_candidates[0]
-        inject_simd_by_pattern(
-            tr_mesh,
-            pattern=r'(for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*numVerts\s*;)',
-            alignment_var='vertices',
-            description="tr_mesh.c vertex loop"
-        )
-    else:
-        print("[WARN] tr_mesh.c not found anywhere under code/")
-
-    # ---- bg_pmove.c : touch-entity loop ----
     bg_pmove_candidates = glob.glob("code/**/bg_pmove.c", recursive=True)
     if bg_pmove_candidates:
-        bg_pmove = bg_pmove_candidates[0]
         inject_simd_by_pattern(
-            bg_pmove,
+            bg_pmove_candidates[0],
             pattern=r'(for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*pm->numtouch\s*;)',
             alignment_var='pm->touchents',
             description="bg_pmove.c touch loop"
@@ -254,11 +236,11 @@ def find_and_patch_simd_loops():
 
 
 # ===========================================================================
-# mimalloc
+# mimalloc (CMake >= 3.18 via pip)
 # ===========================================================================
 
 def install_newer_cmake():
-    """Install a recent CMake via pip (Ubuntu 20.04 ships 3.16, mimalloc needs >= 3.18)."""
+    """Install recent CMake via pip (Ubuntu 20.04 ships 3.16, mimalloc needs >= 3.18)."""
     print("[INFO] Upgrading CMake via pip (requires >= 3.18 for mimalloc)...")
     subprocess.run(["python3", "-m", "pip", "install", "--upgrade", "pip"], check=True)
     subprocess.run(["python3", "-m", "pip", "install", "cmake>=3.18"], check=True)
@@ -325,7 +307,7 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
 
 
 # ===========================================================================
-# Mirror download
+# Mirror download (.pk3 only, excludes sg_pak0.pk3)
 # ===========================================================================
 
 def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max_depth=10):
