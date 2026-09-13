@@ -31,6 +31,7 @@ jobs:
             ccache-aarch64-
 
       - name: Build inside ARM64 Docker Container
+        timeout-minutes: 120
         run: |
           mkdir -p .ccache
           docker run --rm --privileged --platform linux/arm64 \
@@ -41,7 +42,7 @@ jobs:
             arm64v8/ubuntu:20.04 bash -c "
             export DEBIAN_FRONTEND=noninteractive
             apt-get update && apt-get install -y \
-              build-essential cmake python3 git \
+              build-essential python3 python3-pip git \
               libsdl2-dev libopenal-dev libcurl4-openssl-dev \
               python3-urllib3 ccache
             ccache -M 2G
@@ -54,3 +55,4 @@ jobs:
         with:
           name: smokinguns-arm64
           path: build/release-linux-aarch64/
+          retention-days: 30
