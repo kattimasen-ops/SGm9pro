@@ -1,47 +1,30 @@
 import os
 import re
 
-def find_file_flexibly(filename, start_dir="."):
-    """Recursively search for files using case-insensitive matching to prevent layout failures."""
-    target = filename.lower()
-    for root, dirs, files in os.walk(start_dir):
-        for f in files:
-            if f.lower() == target:
-                return os.path.join(root, f)
-    return None
-
-def patch_makefile():
-    makefile_path = find_file_flexibly("Makefile")
-    if not makefile_path:
-        print("Error: Makefile could not be found anywhere in workspace tree.")
-        print("Dumping root workspace contents for debugging:")
-        try:
-            for item in os.listdir("."):
-                print(f"  [Found Root Item] {item}")
-        except Exception as e:
-            print(f"  Could not read root directory: {e}")
-        return None
+def patch_makefile(filepath="Makefile"):
+    """Your original baseline Makefile patcher for AArch64 and game shared libraries."""
+    if not os.path.exists(filepath):
+        print(f"Error: Makefile not found at {filepath}")
+        return
         
-    print(f"Discovered Makefile at: {makefile_path}")
-    with open(makefile_path, 'r', encoding='utf-8', errors='ignore') as f:
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
     # Enforce aarch64 target definitions and shared library compilation
     content = re.sub(r'ARCH\s*\?=\s*.*', 'ARCH ?= aarch64', content)
     content = re.sub(r'BUILD_GAME_SO\s*\?=\s*.*', 'BUILD_GAME_SO ?= 1', content)
     
-    with open(makefile_path, 'w', encoding='utf-8') as f:
+    with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print("Makefile successfully patched for AArch64.")
-    return os.path.dirname(makefile_path)
 
-def inject_neon_math():
-    q_math_path = find_file_flexibly("q_math.c")
-    if not q_math_path:
-        print("Notice: q_math.c not found, skipping NEON math injection.")
+def inject_neon_math(filepath="code/qcommon/q_math.c"):
+    """Replaces legacy float calculations with Cortex-A35 hardware NEON instructions."""
+    if not os.path.exists(filepath):
+        print(f"Notice: {filepath} not found, skipping NEON math injection.")
         return
         
-    with open(q_math_path, 'r', encoding='utf-8', errors='ignore') as f:
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
         
     if "arm_neon.h" not in content:
@@ -59,14 +42,14 @@ def inject_neon_math():
         content = re.sub(r'(float\s+Q_rsqrt\s*\(\s*float\s+number\s*\)\s*\{)', neon_code + r'\1', content, count=1)
         content = re.sub(r'(float\s+Q_rsqrt.*?return.*?\}\n)', r'\1#endif\n', content, flags=re.DOTALL, count=1)
         
-        with open(q_math_path, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        print(f"Injected ARM NEON hardware math intrinsics into {q_math_path}")
+        print(f"Injected ARM NEON hardware math intrinsics into {filepath}")
 
-def inject_openmp_simd(target_filename, target_string):
-    filepath = find_file_flexibly(target_filename)
-    if not filepath:
-        print(f"Notice: {target_filename} not found, skipping OpenMP SIMD injection.")
+def inject_openmp_simd(filepath, target_string):
+    """Forces OpenMP SIMD vectorization on heavy loops for the RK3326 processor."""
+    if not os.path.exists(filepath):
+        print(f"Notice: {filepath} not found, skipping OpenMP SIMD injection.")
         return
         
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -79,12 +62,10 @@ def inject_openmp_simd(target_filename, target_string):
         print(f"Injected OpenMP SIMD pragma vectorization into {filepath}")
 
 if __name__ == '__main__':
-    build_dir = patch_makefile()
-    inject_neon_math()
-    inject_openmp_simd('tr_mesh.c', 'for ( i = 0 ; i < numVerts ; i++ )')
-    inject_openmp_simd('bg_pmove.c', 'for ( i = 0 ; i < pml.numtouch ; i++ )')
+    # 1. Run your baseline Makefile modification
+    patch_makefile('Makefile')
     
-    # Save target path so workflow runner transitions smoothly
-    if build_dir:
-        with open(".build_dir", "w", encoding='utf-8') as f:
-            f.write(build_dir)
+    # 2. Stack high-performance hardware micro-optimizations directly into source files
+    inject_neon_math('code/qcommon/q_math.c')
+    inject_openmp_simd('code/renderer/tr_mesh.c', 'for ( i = 0 ; i < numVerts ; i++ )')
+    inject_openmp_simd('code/game/bg_pmove.c', 'for ( i = 0 ; i < pml.numtouch ; i++ )')
