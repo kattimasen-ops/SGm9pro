@@ -9,8 +9,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Workflow Repository
         uses: actions/checkout@v4
+
+      - name: Clone Official Smokin' Guns Source Code
+        run: |
+          git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git temp_source
+          # Move source files into the root workspace so your scripts and make find them natively
+          cp -r temp_source/* .
+          rm -rf temp_source
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -22,11 +29,6 @@ jobs:
             apt-get update && apt-get install -y build-essential python3 git libsdl2-dev libopenal-dev libcurl4-openssl-dev
             cd /work
             python3 .github/scripts/patch_arm64.py
-            
-            # Navigate to the dynamically discovered build directory where the Makefile lives
-            BUILD_PATH=\$(cat .build_dir 2>/dev/null || echo \".\")
-            cd \"\$BUILD_PATH\"
-            
             make -j$(nproc) ARCH=aarch64 BUILD_GAME_SO=1 OPTIMIZE=\"-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-math-errno -fno-trapping-math -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon -fopenmp-simd -flax-vector-conversions -mearly-ra=all\" LDFLAGS=\"-Wl,-O1 -Wl,--as-needed -Wl,--strip-all\"
           "
 
