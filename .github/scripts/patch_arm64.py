@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Smokin' Guns ARM64 (RK3326 / Cortex-A35) build patcher.
-Fixes ARCH_STRING, injects NEON math, OpenMP SIMD, and mirrors game assets.
+Fixes ARCH_STRING, injects NEON math, OpenMP SIMD, builds mimalloc,
+mirrors game assets, and writes a performance autoexec.cfg.
 """
 
 import os
@@ -10,6 +11,7 @@ import subprocess
 import urllib.request
 import urllib.parse
 import html.parser
+import shutil
 
 
 class DirectoryParser(html.parser.HTMLParser):
@@ -35,8 +37,9 @@ def patch_makefile(filepath="Makefile"):
     Patch Makefile to:
       1. Set ARCH ?= aarch64
       2. Enable BUILD_GAME_SO
-      3. Disable QVM tools (not needed for ARM64)
-      4. Fix the fmt width issue (tput fallback)
+      3. Disable QVM tools
+      4. Fix fmt width issue
+      5. Ensure FILE_ARCH is set for aarch64
     """
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
@@ -44,27 +47,17 @@ def patch_makefile(filepath="Makefile"):
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
-    # 1) Force ARCH to aarch64
     content = re.sub(r'ARCH\s*\?=\s*.*', 'ARCH ?= aarch64', content)
-
-    # 2) Enable shared game libraries
     content = re.sub(r'BUILD_GAME_SO\s*\?=\s*.*', 'BUILD_GAME_SO ?= 1', content)
-
-    # 3) Disable QVM compilation (not needed / broken on cross-compile)
     content = re.sub(r'BUILD_GAME_QVM\s*\?=\s*.*', 'BUILD_GAME_QVM ?= 0', content)
 
-    # 4) Fix fmt width issue: ensure tput fallback doesn't pass negative width
-    #    The original Makefile uses: -DARCH_STRING=\"$(FILE_ARCH)\"
-    #    We ensure ARCH_STRING is always defined for aarch64.
-    #    Also guard against empty tput output causing fmt -4.
+    # Fix fmt width fallback
     if 'FALLBACK_WIDTH' not in content:
-        # Replace the tput line with a safe fallback
         content = re.sub(
             r'(WIDTH\s*:=\s*).*?\n',
             r'\1$(shell tput cols 2>/dev/null || echo 80)\n',
             content, count=1
         )
-        # Add a fallback if tput returns empty
         content = content.replace(
             'WIDTH := $(shell tput cols 2>/dev/null || echo 80)',
             'WIDTH := $(shell tput cols 2>/dev/null)\n'
@@ -73,12 +66,7 @@ def patch_makefile(filepath="Makefile"):
             'endif'
         )
 
-    # 5) Ensure ARCH_STRING is passed to the compiler
-    #    In the original Makefile, FILE_ARCH is defined as:
-    #      ifeq ($(ARCH),aarch64)
-    #        FILE_ARCH = aarch64
-    #      endif
-    #    We verify this exists; if not, we add it.
+    # Ensure FILE_ARCH is defined for aarch64
     if 'FILE_ARCH' not in content:
         content = content.replace(
             'ifeq ($(ARCH),aarch64)',
@@ -95,14 +83,8 @@ def patch_makefile(filepath="Makefile"):
 def patch_q_platform(filepath="code/qcommon/q_platform.h"):
     """
     Add AArch64 architecture support to q_platform.h.
-
-    The original code uses a long chain of #elif defined(__xxx__) to set
-    ARCH_STRING.  Rather than hardcoding 'aarch64' inside an #elif block,
-    we rely on the Makefile to pass -DARCH_STRING=\"aarch64\" (as upstream
-    ioquake3 does).  However, the header still needs a safe fallback so it
-    compiles even if the Makefile variable is missing.
-
-    The real fix: ensure the header defines ARCH_STRING for __aarch64__.
+    The real fix: ensure ARCH_STRING is defined for __aarch64__ as a fallback,
+    while the Makefile also passes -DARCH_STRING.
     """
     if not os.path.exists(filepath):
         print(f"Error: {filepath} not found")
@@ -114,17 +96,6 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         print("[SKIP] q_platform.h already has AArch64 support.")
         return False
 
-    # Locate the architecture detection chain.
-    # The file typically has something like:
-    #   #if defined(__i386__) ... 
-    #   #elif defined(__x86_64__) ...
-    #   #elif defined(__powerpc__) ...
-    #   #else
-    #   #error "Architecture not supported"
-    #   #endif
-    #
-    # We insert an #elif block for __aarch64__ BEFORE the #else.
-
     aarch64_block = (
         "#elif defined(__aarch64__) || defined(_M_ARM64)\n"
         "#define ARCH_STRING \"aarch64\"\n"
@@ -133,8 +104,6 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         "#define id386 0\n"
     )
 
-    # Try to insert before the #else that precedes #error
-    # Pattern: look for the #else immediately preceding #error "Architecture not supported"
     pattern = r'(#else\s*\n\s*#error\s+"Architecture not supported")'
     if re.search(pattern, content):
         content = re.sub(pattern, aarch64_block + r'\n\1', content, count=1)
@@ -143,14 +112,11 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         print("[PATCHED] AArch64 support added to q_platform.h.")
         return True
 
-    # Fallback: try inserting before the final #endif of the arch chain
-    # Look for the #error line and insert before its preceding #else
     error_line = '#error "Architecture not supported"'
     if error_line in content:
         lines = content.splitlines(keepends=True)
         for i, line in enumerate(lines):
             if error_line in line:
-                # Walk backwards to find the #else
                 for j in range(i - 1, -1, -1):
                     if lines[j].strip() == '#else':
                         lines.insert(j, aarch64_block + '\n')
@@ -169,11 +135,7 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
 def inject_neon_math(filepath="code/qcommon/q_math.c"):
     """
     Replace Q_rsqrt with a NEON-accelerated version for AArch64.
-    Uses vrsqrteq_f32 (reciprocal square root estimate) + one Newton-Raphson step.
-
-    This is a micro-optimization that helps with vector normalisation in the
-    renderer and game physics.  On Cortex-A35 the NEON unit is 128-bit wide
-    and vrsqrteq_f32 is a single-instruction estimate.
+    Uses vrsqrteq_f32 + one Newton-Raphson step.
     """
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
@@ -199,7 +161,6 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
         "#else\n"
     )
 
-    # Insert before the existing Q_rsqrt definition
     new_content, n = re.subn(
         r'(float\s+Q_rsqrt\s*\(\s*float\s+number\s*\)\s*\{)',
         neon_code + r'\1', content, count=1
@@ -208,10 +169,6 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
         print("[WARN] Q_rsqrt signature not found - NEON injection skipped.")
         return
 
-    # Close the #if/#else block after the original function body.
-    # Find the end of the original Q_rsqrt function (matching closing brace).
-    # We look for the first '}' after the function opening.
-    # A simpler approach: find the return statement and the closing brace.
     pattern = r'(float\s+Q_rsqrt\s*\(.*?return.*?\n\})'
     match = re.search(pattern, new_content, flags=re.DOTALL)
     if not match:
@@ -227,11 +184,7 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
 
 def inject_openmp_simd(filepath, target_string, alignment_var="vertices"):
     """
-    Inject `#pragma omp simd aligned(...)` before heavy loops to encourage
-    auto-vectorisation on AArch64 NEON.
-
-    The pragma is only useful if the loop body is vectorisable and the data
-    is aligned.  We use the alignment hint for the most common arrays.
+    Inject `#pragma omp simd aligned(...)` before heavy loops.
     """
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
@@ -255,6 +208,99 @@ def inject_openmp_simd(filepath, target_string, alignment_var="vertices"):
     print(f"[PATCHED] OpenMP SIMD pragma injected into {filepath}.")
 
 
+def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
+    """
+    Clone, build, and install mimalloc as a shared library.
+    The library is built with the SAME Cortex-A35 flags as the game
+    and placed in the output directory so it's packaged in the artifact.
+    """
+    mimalloc_src = "/tmp/mimalloc-src"
+    mimalloc_build = "/tmp/mimalloc-build"
+
+    if os.path.exists(mimalloc_src):
+        shutil.rmtree(mimalloc_src)
+    if os.path.exists(mimalloc_build):
+        shutil.rmtree(mimalloc_build)
+
+    print("[INFO] Cloning mimalloc from GitHub...")
+    subprocess.run(
+        ["git", "clone", "--depth=1",
+         "https://github.com/microsoft/mimalloc.git", mimalloc_src],
+        check=True
+    )
+
+    os.makedirs(mimalloc_build, exist_ok=True)
+
+    # Use the same optimization flags as the game for consistency.
+    mimalloc_cflags = (
+        "-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer "
+        "-fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants "
+        "-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon -fno-unroll-loops"
+    )
+
+    print("[INFO] Configuring mimalloc with CMake...")
+    subprocess.run(
+        ["cmake", mimalloc_src,
+         "-DCMAKE_BUILD_TYPE=Release",
+         "-DMI_BUILD_SHARED=ON",
+         "-DMI_BUILD_STATIC=OFF",
+         "-DMI_BUILD_OBJECT=OFF",
+         f"-DCMAKE_C_FLAGS={mimalloc_cflags}",
+         f"-DCMAKE_INSTALL_PREFIX={os.path.abspath(install_prefix)}"],
+        cwd=mimalloc_build,
+        check=True
+    )
+
+    print("[INFO] Building mimalloc...")
+    subprocess.run(
+        ["make", "-j", str(os.cpu_count() or 2)],
+        cwd=mimalloc_build,
+        check=True
+    )
+
+    print("[INFO] Installing mimalloc to build output...")
+    subprocess.run(
+        ["make", "install"],
+        cwd=mimalloc_build,
+        check=True
+    )
+
+    # Also copy directly into the mod folder for convenience
+    mod_dir = os.path.join(install_prefix, "smokinguns")
+    os.makedirs(mod_dir, exist_ok=True)
+    for lib in ["libmimalloc.so", "libmimalloc.so.3"]:
+        src_lib = os.path.join(install_prefix, "lib", lib)
+        if os.path.exists(src_lib):
+            shutil.copy2(src_lib, os.path.join(mod_dir, lib))
+            print(f"[INFO] Copied {lib} to {mod_dir}")
+
+    print("[PATCHED] mimalloc built and installed.")
+
+
+def write_autoexec(output_mod_dir):
+    """Write an autoexec.cfg with maximum performance cvars."""
+    os.makedirs(output_mod_dir, exist_ok=True)
+    autoexec_path = os.path.join(output_mod_dir, "autoexec.cfg")
+    if os.path.exists(autoexec_path):
+        return
+    cvars = [
+        'seta s_musicvolume "0"',
+        'seta cg_boostfps "1"',
+        'seta cg_gunsmoke "0"',
+        'seta cg_glowflares "0"',
+        'seta r_picmip "5"',
+        'seta r_vertexLight "1"',
+        'seta r_dynamiclight "0"',
+        'seta r_fastsky "1"',
+        'seta com_maxfps "60"',
+        'seta com_busyWait "0"',
+    ]
+    with open(autoexec_path, 'w') as f:
+        f.write("// Auto-generated by patch_arm64.py\n")
+        f.write("\n".join(cvars) + "\n")
+    print(f"[INFO] autoexec.cfg written to {autoexec_path}")
+
+
 def fix_git_safe_directory():
     """Prevent 'dubious ownership' git errors inside Docker."""
     subprocess.run(
@@ -264,12 +310,7 @@ def fix_git_safe_directory():
 
 
 def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max_depth=10):
-    """
-    Recursively crawl and download the Smokin' Guns asset mirror.
-
-    Downloads .pk3, .cfg, .dat, .txt, .wad files into the correct mod
-    directory structure so they are packaged into the GitHub Actions artifact.
-    """
+    """Recursively crawl and download the Smokin' Guns asset mirror."""
     if max_depth <= 0:
         return
     active_url = urllib.parse.urljoin(base_url, current_subpath)
@@ -320,27 +361,27 @@ def main():
     inject_neon_math('code/qcommon/q_math.c')
 
     # OpenMP SIMD pragmas on heavy renderer / game loops
-    # tr_mesh.c  - vertex transformation loop (renderer hot path)
     inject_openmp_simd(
         'code/renderer/tr_mesh.c',
         'for ( i = 0 ; i < numVerts ; i++ )',
         alignment_var='vertices'
     )
-    # bg_pmove.c - player movement touch loop (game physics hot path)
     inject_openmp_simd(
         'code/game/bg_pmove.c',
         'for ( i = 0 ; i < pml.numtouch ; i++ )',
         alignment_var='pml.touchents'
     )
 
+    # --- Build mimalloc --------------------------------------------------
+    build_and_install_mimalloc()
+
     # --- Compilation -----------------------------------------------------
     cpu_count = os.cpu_count() or 2
     cc = os.environ.get("CC", "gcc")
 
-    # Cortex-A35 optimisation flags.
-    # Removed: -mearly-ra=all  (not a valid GCC option)
-    # Removed: -fno-plt        (unreliable on some aarch64 toolchains)
-    # Removed: -fno-semantic-interposition (only relevant for shared libraries)
+    # Cortex-A35 optimization flags.
+    # -fno-unroll-loops: avoids I-cache thrashing on in-order A35.
+    # -fno-semantic-interposition: lets compiler inline across .so boundaries.
     optimize_flags = (
         "-O3 "
         "-mcpu=cortex-a35 "
@@ -351,6 +392,7 @@ def main():
         "-ftree-vectorize "
         "-fno-math-errno "
         "-fno-trapping-math "
+        "-fno-semantic-interposition "
         "-fno-stack-protector "
         "-fno-asynchronous-unwind-tables "
         "-fmerge-all-constants "
@@ -362,7 +404,7 @@ def main():
         "-fopenmp-simd "
         "-flax-vector-conversions "
         "-mno-outline-atomics "
-        "-funroll-loops"
+        "-fno-unroll-loops"
     )
 
     compile_cmd = (
@@ -385,6 +427,9 @@ def main():
     print(f"\n[INFO] Mirroring game assets from {mirror_root}")
     print(f"[INFO] Target directory: {output_mod_dir}\n")
     crawl_and_download_mirror(mirror_root, output_mod_dir)
+
+    # --- Write autoexec.cfg -----------------------------------------------
+    write_autoexec(output_mod_dir)
 
     print("\n" + "=" * 60)
     print(" Build complete!")
