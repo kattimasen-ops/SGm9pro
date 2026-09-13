@@ -67,4 +67,4 @@ jobs:
         with:
           name: smokinguns-arm64
           path: build/release-linux-aarch64/
-          retention-days: 30 
+          retention-days: 30
