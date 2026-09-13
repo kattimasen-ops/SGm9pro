@@ -34,6 +34,30 @@ def patch_makefile(filepath="Makefile"):
         f.write(content)
     return True
 
+def patch_q_platform(filepath="code/qcommon/q_platform.h"):
+    if not os.path.exists(filepath):
+        print(f"Error: {filepath} not found")
+        return False
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+    
+    if "__aarch64__" not in content:
+        target = '#error "Architecture not supported"'
+        if target in content:
+            aarch64_block = (
+                "#elif defined(__aarch64__) || defined(_M_ARM64)\n"
+                "#define ARCH_STRING \"aarch64\"\n"
+                "#define CPUSTRING \"aarch64\"\n"
+                "#define ID_LITTLE_ENDIAN 1\n"
+                "#define id386 0\n\n"
+            )
+            content = content.replace(target, aarch64_block + target)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print("[PATCHED] AArch64-Unterstützung zu q_platform.h hinzugefügt.")
+            return True
+    return False
+
 def inject_neon_math(filepath="code/qcommon/q_math.c"):
     if not os.path.exists(filepath):
         return
@@ -55,17 +79,17 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
             r'(float\s+Q_rsqrt\s*\(\s*float\s+number\s*\)\s*\{)',
             neon_code + r'\1', content, count=1)
         if n == 0:
-            print("[WARN] Q_rsqrt-Signatur nicht gefunden - NEON-Injection uebersprungen, Original unveraendert.")
+            print("[WARN] Q_rsqrt-Signatur nicht gefunden - NEON-Injection uebersprungen.")
             return
         new_content, n = re.subn(
             r'(float\s+Q_rsqrt.*?return.*?\}\n)', r'\1#endif\n',
             new_content, flags=re.DOTALL, count=1)
         if n == 0:
-            print("[WARN] Ende von Q_rsqrt nicht gefunden - #endif fehlt, Datei NICHT geschrieben (waere ungueltiges C).")
+            print("[WARN] Ende von Q_rsqrt nicht gefunden - #endif fehlt.")
             return
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(new_content)
-        print("[PATCHED] NEON-Version von Q_rsqrt eingefuegt - bitte q_math.c manuell gegenpruefen.")
+        print("[PATCHED] NEON-Version von Q_rsqrt eingefuegt.")
 
 def inject_openmp_simd(filepath, target_string):
     if not os.path.exists(filepath):
@@ -101,49 +125,17 @@ def crawl_and_download_mirror(base_url, target_base_dir, current_subpath=""):
         print(f"Error crawling {active_url}: {e}")
 
 if __name__ == '__main__':
-    # Verhindert das "dubious ownership"-Git-Problem proaktiv, statt sich
-    # darauf zu verlassen, dass es zufaellig nicht-fatal bleibt.
     subprocess.run(["git", "config", "--global", "--add", "safe.directory", "/work"], check=False)
 
     patch_makefile('Makefile')
+    patch_q_platform('code/qcommon/q_platform.h')
     inject_neon_math('code/qcommon/q_math.c')
     inject_openmp_simd('code/renderer/tr_mesh.c', 'for ( i = 0 ; i < numVerts ; i++ )')
     inject_openmp_simd('code/game/bg_pmove.c', 'for ( i = 0 ; i < pml.numtouch ; i++ )')
 
     cpu_count = os.cpu_count() or 2
-
-    # CC kann von aussen (YAML) auf "ccache gcc" gesetzt werden, um
-    # wiederholte CI-Laeufe schneller zu machen. Das beschleunigt NUR den
-    # Build selbst, nicht die Laufzeit-Performance auf dem Handheld -
-    # beides sind unabhaengige Dinge.
     cc = os.environ.get("CC", "cc")
 
-    # -mearly-ra=all entfernt: keine gueltige GCC-Option, war der
-    # urspruengliche Build-Abbruch ("unrecognized command line option").
-    #
-    # -mno-outline-atomics: vermeidet Laufzeit-Bibliotheksaufrufe fuer
-    #   Atomic-Operationen (Cortex-A35 hat ohnehin keine LSE-Atomics,
-    #   die IFUNC-Indirektion dafuer ist damit reiner Overhead).
-    # -funroll-loops: hilft bei kleinen, haeufig durchlaufenen
-    #   Engine-Loops, kostet aber Code-Groesse (mehr I-Cache-Druck) -
-    #   bei 1GB RAM im Zweifel testen und bei Verschlechterung entfernen.
-    # BUILD_GAME_QVM=0: explizit auf der Kommandozeile erzwungen (nicht
-    #   nur ueber die Makefile-Regex), damit garantiert die nativen
-    #   .so-Module gebaut werden - offiziell dokumentierter Weg laut
-    #   ioquake3.org/help/players-guide (+set vm_cgame 0 usw. zur
-    #   Laufzeit ist das Gegenstueck dazu, das gehoert ins Launch-Script,
-    #   nicht hierhin).
-    #
-    # BEWUSST NICHT ergaenzt:
-    # -flto - in einer frueheren Runde dieses Projekts explizit als
-    #   Ursache fuer ARM64-Abstuerze bei ioquake3-Engines dokumentiert.
-    #   Nicht ohne gezielten, isolierten Test hinzufuegen.
-    # -mfpu=... - reine ARM32-Flag, unter AArch64 ungueltig (NEON ist
-    #   dort bereits verpflichtender Architekturteil, keine Aktivierung
-    #   noetig).
-    # Profile-Guided Optimization (PGO) - braeuchte echte Laufzeitprofile
-    #   vom Handheld selbst, in einer CI-Umgebung ohne das Zielgeraet
-    #   nicht sinnvoll umsetzbar.
     compile_cmd = (
         f"make -j{cpu_count} ARCH=aarch64 BUILD_GAME_SO=1 BUILD_GAME_QVM=0 CC=\"{cc}\" "
         f"OPTIMIZE=\"-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math "
