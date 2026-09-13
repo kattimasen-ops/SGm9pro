@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smokin' Guns ARM64 (RK3326 / Cortex-A35) build patcher.
-Fixes ARCH_STRING, SDL_CFLAGS/SDL_LIBS, injects NEON math, OpenMP SIMD,
+Fixes ARCH_STRING, SDL12-compat, injects NEON math, OpenMP SIMD,
 builds mimalloc, mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 """
 
@@ -41,8 +41,69 @@ class DirectoryParser(html.parser.HTMLParser):
 
 
 # ===========================================================================
-# Makefile patch (ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, ARCH_STRING,
-#                 SDL_CFLAGS / SDL_LIBS from sdl2-config)
+# libsdl12-compat from source (patched version)
+# ===========================================================================
+
+def build_libsdl12_compat(install_prefix="/usr/local"):
+    """
+    Build a recent, patched version of libsdl12-compat from source.
+    This provides the SDL 1.2 compatibility headers (SDL_keysym.h,
+    SDL_keysym.h, etc.) that SmokinGuns needs, while using SDL2 behind
+    the scenes. This fixes the 'SDL_keysym' build errors.
+    """
+    src_dir = "/tmp/sdl12-compat-src"
+    build_dir = "/tmp/sdl12-compat-build"
+
+    if os.path.exists(src_dir):
+        shutil.rmtree(src_dir)
+    if os.path.exists(build_dir):
+        shutil.rmtree(build_dir)
+
+    print("[INFO] Cloning libsdl12-compat (patched version)...")
+    subprocess.run(
+        ["git", "clone", "--depth=1",
+         "https://github.com/libsdl-org/sdl12-compat.git", src_dir],
+        check=True
+    )
+
+    os.makedirs(build_dir, exist_ok=True)
+
+    print("[INFO] Configuring libsdl12-compat with CMake...")
+    subprocess.run(
+        ["cmake", src_dir,
+         "-DCMAKE_BUILD_TYPE=Release",
+         "-DCMAKE_INSTALL_PREFIX=" + install_prefix,
+         "-DSDL12DEVEL=ON",  # Install development headers
+         "-DSDL12TESTS=OFF"],
+        cwd=build_dir, check=True
+    )
+
+    print("[INFO] Building libsdl12-compat...")
+    subprocess.run(
+        ["make", "-j", str(os.cpu_count() or 2)],
+        cwd=build_dir, check=True
+    )
+
+    print("[INFO] Installing libsdl12-compat...")
+    subprocess.run(
+        ["make", "install"],
+        cwd=build_dir, check=True
+    )
+    subprocess.run(["ldconfig"], check=False)
+
+    # Verify the headers were installed
+    for h in ["SDL_keysym.h", "SDL_keysym.h", "SDL.h"]:
+        path = os.path.join(install_prefix, "include", "SDL", h)
+        if os.path.exists(path):
+            print(f"[INFO] Header installed: {path}")
+        else:
+            print(f"[WARN] Header not found: {path}")
+
+    print("[PATCHED] libsdl12-compat built and installed.")
+
+
+# ===========================================================================
+# Makefile patch
 # ===========================================================================
 
 def patch_makefile(filepath="Makefile"):
@@ -51,8 +112,7 @@ def patch_makefile(filepath="Makefile"):
       - ARCH, BUILD_GAME_SO, BUILD_GAME_QVM
       - WIDTH single-line replacement
       - ARCH_STRING via CFLAGS
-      - SDL_CFLAGS / SDL_LIBS explicitly from sdl2-config
-        (fixes 'SDL.h: No such file or directory' when pkg-config fails)
+      - SDL_CFLAGS / SDL_LIBS explicitly pointing to sdl12-compat
     """
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
@@ -83,35 +143,30 @@ def patch_makefile(filepath="Makefile"):
             content, count=1, flags=re.MULTILINE
         )
 
-    # --- SDL_CFLAGS / SDL_LIBS from sdl2-config ---
-    # The upstream Makefile tries pkg-config first and falls back to
-    # sdl2-config.  In minimal Docker images, pkg-config may fail silently
-    # and the fallback may also not be reached (e.g. if 'which' is missing).
-    # We append explicit assignments AFTER the existing SDL section so they
-    # always win.  This is the fix recommended by the ioquake3 community.
+    # --- SDL_CFLAGS / SDL_LIBS from sdl12-compat ---
+    # We use the sdl12-compat development headers, which provide the
+    # SDL 1.2 API on top of SDL2. This is what SmokinGuns expects.
     sdl_fix = (
         "\n"
-        "# ---- SDL2 flags override (added by patch_arm64.py) ----\n"
-        "SDL_CFLAGS = $(shell sdl2-config --cflags 2>/dev/null)\n"
-        "SDL_LIBS = $(shell sdl2-config --libs 2>/dev/null)\n"
+        "# ---- SDL12-compat flags override (added by patch_arm64.py) ----\n"
+        "SDL_CFLAGS = -I/usr/local/include/SDL -D_REENTRANT\n"
+        "SDL_LIBS = -L/usr/local/lib -lSDL -lSDL2\n"
         "ifneq ($(SDL_CFLAGS),)\n"
         "  CFLAGS += $(SDL_CFLAGS)\n"
         "endif\n"
         "ifneq ($(SDL_LIBS),)\n"
         "  CLIENT_LIBS += $(SDL_LIBS)\n"
         "endif\n"
-        "# ---- end SDL2 flags override ----\n"
+        "# ---- end SDL12-compat flags override ----\n"
     )
 
-    if 'SDL2 flags override' not in content:
-        # Insert near the end of the file (after all normal assignments)
-        # so our values are not overwritten later.
+    if 'SDL12-compat flags override' not in content:
         content = content.rstrip() + "\n" + sdl_fix + "\n"
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, "
-          "WIDTH, ARCH_STRING, SDL_CFLAGS/SDL_LIBS")
+          "WIDTH, ARCH_STRING, SDL12-compat flags")
     return True
 
 
@@ -419,6 +474,10 @@ def main():
 
     fix_git_safe_directory()
 
+    # --- Build patched libsdl12-compat from source ---
+    build_libsdl12_compat()
+
+    # --- Source patches ---
     patch_makefile('Makefile')
     patch_q_platform('code/qcommon/q_platform.h')
     inject_neon_math('code/qcommon/q_math.c')
