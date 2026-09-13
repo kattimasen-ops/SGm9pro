@@ -41,7 +41,7 @@ jobs:
           set -x
           export DEBIAN_FRONTEND=noninteractive
 
-          export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=4 -DNDEBUG -w"
+          export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-math-errno -fno-trapping-math -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon"
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
           apt-get update
@@ -147,7 +147,6 @@ jobs:
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
-            CFLAGS="-w -fcommon" \
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
@@ -283,6 +282,8 @@ jobs:
           export HOME="${GAMEDIR}"
           mkdir -p "${GAMEDIR}/.smokinguns"
 
+          echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null 2>&1 || true
+
           export SDL_VIDEODRIVER=kmsdrm
           export SDL_AUDIODRIVER=alsa
           export SDL_JOYSTICK_DEVICE=/dev/input/js0
@@ -291,7 +292,7 @@ jobs:
           export LIBGL_GL=1
           export LIBGL_NOTEST=1
           export LIBGL_FB=1
-          export LIBGL_FBO=0
+          export LIBGL_FBO=640x480
           export LIBGL_NOERROR=1
           export LIBGL_FORCE16BITS=1
           export LIBGL_BATCH=100
@@ -302,8 +303,8 @@ jobs:
           export LIBGL_SILENTSTUB=1
           export LIBGL_XREFRESH=0
           export LIBGL_RECYCLEFBO=1
-          export LIBGL_MIPMAP=5
-          export LIBGL_SHRINK=8
+          export LIBGL_MIPMAP=0
+          export LIBGL_SHRINK=0
 
           export SDL12COMPAT_OPENGL_SCALING=0
 
@@ -314,23 +315,56 @@ jobs:
 
           LD_PRELOAD="${GAMEDIR}/libs.aarch64/libSDL2-2.0.so.0:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0:${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
             "${GAMEDIR}/smokinguns.aarch64" \
+            +set fs_basepath "${GAMEDIR}" \
+            +set fs_homepath "${GAMEDIR}" \
+            +set fs_game smokinguns \
+            +set name "St0len-One" \
+            +set net_enabled 1 \
+            +set cl_master master.smokin-guns.org \
             +set com_hunkMegs 256 \
             +set com_maxfps 60 \
-            +set net_enabled 0 \
+            +set cl_maxpackets 30 \
+            +set rate 15000 \
+            +set cg_forceModel 1 \
+            +set cg_blood 0 \
+            +set cg_brassTime 0 \
+            +set cg_gibs 0 \
+            +set cg_marks 0 \
+            +set cg_impactparticles 0 \
+            +set cg_shadows 0 \
+            +set s_musicvolume 0 \
+            +set s_khz 11 \
             +set sv_pure 0 \
-            +set vm_cgame 0 \
-            +set vm_game 0 \
-            +set vm_ui 0 \
-            +set s_useOpenAL 0 \
+            +set in_mouse 1 \
+            +set in_nograb 0 \
+            +set in_joystick 0 \
+            +set r_mode -1 \
             +set r_customwidth 640 \
             +set r_customheight 480 \
             +set r_fullscreen 1 \
-            +set r_primitives 2 \
-            +set r_smp 0 \
-            +set cg_shadows 0 \
-            +set fs_basepath "${GAMEDIR}" \
-            +set fs_homepath "${GAMEDIR}" \
-            +set fs_game smokinguns
+            +set r_vertexLight 1 \
+            +set r_overBrightBits 0 \
+            +set r_ignorehwgamma 1 \
+            +set r_ext_compressed_textures 1 \
+            +set r_ext_framebuffer 0 \
+            +set r_picmip 2 \
+            +set r_lodbias 2 \
+            +set r_subdivisions 8 \
+            +set r_detailtextures 0 \
+            +set r_texturebits 16 \
+            +set r_colorbits 16 \
+            +set r_dynamiclight 0 \
+            +set r_shadows 0 \
+            +set r_fastsky 1 \
+            +set r_swapInterval 0 \
+            +set sensitivity 18 \
+            +set cl_yawspeed 140 \
+            +set cl_pitchspeed 140 \
+            +set vm_game 0 \
+            +set vm_cgame 0 \
+            +set vm_ui 0 \
+            +set cl_allowDownload 1 \
+            +set cl_wwwDownload 1
 
           GAME_EXIT=$?
           echo "Game exited with code: ${GAME_EXIT}"
