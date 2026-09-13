@@ -5,17 +5,11 @@ Patch Smokin' Guns and sdl12-compat for ARM64 build.
 Can be invoked from:
   - the SmokinGuns source root (patches Makefile + q_platform.h)
   - the sdl12-compat source root (patches SDL_HINT_* fallbacks)
-
-The Smokin' Guns game source is NOT patched for SDL2. It stays on the
-SDL 1.2 API and is compiled against the real SDL 1.2 headers from
-libsdl1.2-dev. At runtime, sdl12-compat (built from source) provides
-the SDL 1.2 API on top of SDL2 / KMSDRM via LD_PRELOAD.
 """
 
 import os
 import re
 import sys
-
 
 def diagnostic_dump():
     print("========== MAKEFILE DIAGNOSTIC DUMP ==========")
@@ -32,14 +26,7 @@ def diagnostic_dump():
 
 
 def patch_makefile():
-    """Patch the Smokin' Guns Makefile.
-
-    - Fix the BASENAME -> BASEGAME typo in Q3UIOBJ.
-    - Add -I/usr/include/SDL to CFLAGS. The Makefile does not add this
-      path on its own for the Linux platform (verified against earlier
-      build logs).
-    - Remove the upstream rm/python/-Werror hygiene issues.
-    """
+    """Patch the Smokin' Guns Makefile."""
     makefile = "Makefile"
     if not os.path.exists(makefile):
         print(f"[WARN] {makefile} not found - skipping")
@@ -55,16 +42,12 @@ def patch_makefile():
             "$(B)/$(BASEGAME)/ui/ui_syscalls.o",
         )
         print("[PATCHED] Makefile: BASENAME -> BASEGAME in Q3UIOBJ")
-    else:
-        print("[INFO] Makefile: BASENAME typo not present")
 
     # ---- Inject the SDL 1.2 include path as a global override --------
     sdl_include_line = "override CFLAGS += -I/usr/include/SDL\n"
     if "override CFLAGS += -I/usr/include/SDL" not in content:
         content = sdl_include_line + content
         print("[PATCHED] Makefile: added -I/usr/include/SDL to global CFLAGS")
-    else:
-        print("[INFO] Makefile: SDL include override already present")
 
     # ---- Hygiene -----------------------------------------------------
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
@@ -75,9 +58,18 @@ def patch_makefile():
     content = re.sub(r"-Wuninitialized", "", content)
     content = re.sub(r"-Wstrict-overflow", "", content)
 
+    # ---- Remove toxic x86/architecture flags -------------------------
+    toxic_flags = [
+        "-m32", "-m64", 
+        "-march=native", "march=native", 
+        "-msse", "-msse2", "-msse3", "-mfpmath=sse"
+    ]
+    for flag in toxic_flags:
+        content = content.replace(flag, "")
+    print("[PATCHED] Makefile: toxic x86 architecture flags removed")
+
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: hygiene applied")
     return True
 
 
@@ -100,8 +92,6 @@ def patch_q_platform():
                 continue
 
             changed = False
-
-            # Preferred: add an #elif right after the ARM32 branch.
             pattern = re.compile(
                 r'(#elif defined __arm__\s*\n#define ARCH_STRING "arm"\s*\n)'
             )
@@ -113,7 +103,6 @@ def patch_q_platform():
                 content = new_content
                 changed = True
             else:
-                # Fallback: prepend a hard override block.
                 override = (
                     "/* [PATCHED] ARM64 ARCH_STRING override */\n"
                     "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
@@ -131,29 +120,19 @@ def patch_q_platform():
                 patched += 1
                 print(f"[PATCHED] {path}")
 
-    print(f"[INFO] {patched} q_platform.h file(s) patched")
     return patched
 
 
 def patch_sdl12_compat_hints():
-    """Prepend SDL_HINT_* fallbacks to sdl12-compat/src/SDL12_compat.c.
-
-    Ubuntu 20.04 ships SDL 2.0.10, which does not yet define
-    SDL_HINT_VIDEODRIVER or SDL_HINT_AUDIODRIVER. These were added as
-    formal macros in SDL 2.0.22. The definitions must be inserted at
-    the very top of the file so they are visible before the first use
-    in SDL_InitSubSystem.
-    """
+    """Prepend SDL_HINT_* fallbacks to sdl12-compat/src/SDL12_compat.c."""
     path = os.path.join("src", "SDL12_compat.c")
     if not os.path.exists(path):
-        print(f"[WARN] {path} not found - skipping sdl12-compat hint patch")
         return False
 
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
     if "#ifndef SDL_HINT_VIDEODRIVER" in content:
-        print("[INFO] sdl12-compat hint patch already applied")
         return True
 
     patch = (
