@@ -1,24 +1,32 @@
 import os
 import re
 
-def find_file(filename, start_dir="."):
-    """Recursively search for files across the entire repository to avoid layout assumptions."""
+def find_file_flexibly(filename, start_dir="."):
+    """Recursively search for files using case-insensitive matching to prevent layout failures."""
+    target = filename.lower()
     for root, dirs, files in os.walk(start_dir):
-        if filename in files:
-            return os.path.join(root, filename)
+        for f in files:
+            if f.lower() == target:
+                return os.path.join(root, f)
     return None
 
 def patch_makefile():
-    makefile_path = find_file("Makefile")
+    makefile_path = find_file_flexibly("Makefile")
     if not makefile_path:
-        print("Error: Makefile could not be found in the workspace.")
+        print("Error: Makefile could not be found anywhere in workspace tree.")
+        print("Dumping root workspace contents for debugging:")
+        try:
+            for item in os.listdir("."):
+                print(f"  [Found Root Item] {item}")
+        except Exception as e:
+            print(f"  Could not read root directory: {e}")
         return None
         
     print(f"Discovered Makefile at: {makefile_path}")
     with open(makefile_path, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
-    # Enforce aarch64 target definitions and game shared library compilation
+    # Enforce aarch64 target definitions and shared library compilation
     content = re.sub(r'ARCH\s*\?=\s*.*', 'ARCH ?= aarch64', content)
     content = re.sub(r'BUILD_GAME_SO\s*\?=\s*.*', 'BUILD_GAME_SO ?= 1', content)
     
@@ -28,7 +36,7 @@ def patch_makefile():
     return os.path.dirname(makefile_path)
 
 def inject_neon_math():
-    q_math_path = find_file("q_math.c")
+    q_math_path = find_file_flexibly("q_math.c")
     if not q_math_path:
         print("Notice: q_math.c not found, skipping NEON math injection.")
         return
@@ -56,7 +64,7 @@ def inject_neon_math():
         print(f"Injected ARM NEON hardware math intrinsics into {q_math_path}")
 
 def inject_openmp_simd(target_filename, target_string):
-    filepath = find_file(target_filename)
+    filepath = find_file_flexibly(target_filename)
     if not filepath:
         print(f"Notice: {target_filename} not found, skipping OpenMP SIMD injection.")
         return
@@ -71,15 +79,12 @@ def inject_openmp_simd(target_filename, target_string):
         print(f"Injected OpenMP SIMD pragma vectorization into {filepath}")
 
 if __name__ == '__main__':
-    # Dynamically locate and patch build files
     build_dir = patch_makefile()
-    
-    # Inject high-performance hardware micro-optimizations
     inject_neon_math()
     inject_openmp_simd('tr_mesh.c', 'for ( i = 0 ; i < numVerts ; i++ )')
     inject_openmp_simd('bg_pmove.c', 'for ( i = 0 ; i < pml.numtouch ; i++ )')
     
-    # Cache the target compilation directory path for the GitHub workflow runner
+    # Save target path so workflow runner transitions smoothly
     if build_dir:
         with open(".build_dir", "w", encoding='utf-8') as f:
             f.write(build_dir)
