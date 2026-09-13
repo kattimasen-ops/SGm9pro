@@ -7,6 +7,7 @@ mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 
 import os
 import re
+import glob
 import subprocess
 import urllib.request
 import urllib.parse
@@ -19,12 +20,7 @@ import shutil
 # ===========================================================================
 
 class DirectoryParser(html.parser.HTMLParser):
-    """Parses Apache-style directory listings and extracts only .pk3 files."""
-
-    # Files that are NOT downloaded (too large / not needed)
-    EXCLUDED_FILES = {
-        "sg_pak0.pk3",  # 370 MB base package - already present in the port
-    }
+    EXCLUDED_FILES = {"sg_pak0.pk3"}
 
     def __init__(self):
         super().__init__()
@@ -45,11 +41,11 @@ class DirectoryParser(html.parser.HTMLParser):
 
 
 # ===========================================================================
-# Makefile / source patches
+# Makefile patch
 # ===========================================================================
 
 def patch_makefile(filepath="Makefile"):
-    """Patch Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, fmt fallback, FILE_ARCH."""
+    """Patch Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, fmt fallback, ARCH_STRING."""
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
         return False
@@ -83,23 +79,31 @@ def patch_makefile(filepath="Makefile"):
             '  FILE_ARCH = aarch64'
         )
 
+    # Force ARCH_STRING to be passed via CFLAGS (ioquake3 recommended way)
+    if 'ARCH_STRING' not in content:
+        content = re.sub(
+            r'(CFLAGS\s*\+?=\s*)',
+            r'\1-DARCH_STRING=\\"$(ARCH)\\" ',
+            content, count=1
+        )
+
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
-    print("[PATCHED] Makefile: ARCH=aarch64, BUILD_GAME_SO=1, BUILD_GAME_QVM=0, fmt fallback added")
+    print("[PATCHED] Makefile: ARCH=aarch64, BUILD_GAME_SO=1, BUILD_GAME_QVM=0, ARCH_STRING, fmt fallback")
     return True
 
 
+# ===========================================================================
+# q_platform.h patch (robust fallback)
+# ===========================================================================
+
 def patch_q_platform(filepath="code/qcommon/q_platform.h"):
     """
-    Add AArch64 architecture support to q_platform.h.
-    Inserts an #elif defined(__aarch64__) block before the #error fallback.
-
-    NOTE: The ARCH_STRING must always be identical to the ARCH from the
-    Makefile, otherwise the engine will not find its cgame, game and ui
-    plugins.  The Makefile passes -DARCH_STRING, this is only a safety net.
+    Add AArch64 fallback defines to q_platform.h.
+    The Makefile passes -DARCH_STRING=\"aarch64\", this is only a safety net.
     """
     if not os.path.exists(filepath):
-        print(f"Error: {filepath} not found")
+        print(f"[SKIP] {filepath} not found")
         return False
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
@@ -108,51 +112,42 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         print("[SKIP] q_platform.h already has AArch64 support.")
         return False
 
-    aarch64_block = (
-        "#elif defined(__aarch64__) || defined(_M_ARM64)\n"
+    aarch64_fallback = (
+        "\n"
+        "/* ---- AArch64 (ARM64) fallback support ---- */\n"
+        "#if defined(__aarch64__) && !defined(ARCH_STRING)\n"
         "#define ARCH_STRING \"aarch64\"\n"
+        "#endif\n"
+        "#if defined(__aarch64__) && !defined(CPUSTRING)\n"
         "#define CPUSTRING \"aarch64\"\n"
+        "#endif\n"
+        "#if defined(__aarch64__) && !defined(ID_LITTLE_ENDIAN)\n"
         "#define ID_LITTLE_ENDIAN 1\n"
+        "#endif\n"
+        "#if defined(__aarch64__) && !defined(id386)\n"
         "#define id386 0\n"
+        "#endif\n"
+        "/* ---- end AArch64 fallback ---- */\n"
     )
 
-    pattern = r'(#else\s*\n\s*#error\s+"Architecture not supported")'
-    if re.search(pattern, content):
-        content = re.sub(pattern, aarch64_block + r'\n\1', content, count=1)
+    match = re.search(r'(#define\s+\w+\s*\n)', content)
+    if match:
+        insert_pos = match.end()
+        content = content[:insert_pos] + aarch64_fallback + content[insert_pos:]
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        print("[PATCHED] AArch64 support added to q_platform.h.")
+        print("[PATCHED] AArch64 fallback block added to q_platform.h.")
         return True
 
-    error_line = '#error "Architecture not supported"'
-    if error_line in content:
-        lines = content.splitlines(keepends=True)
-        for i, line in enumerate(lines):
-            if error_line in line:
-                for j in range(i - 1, -1, -1):
-                    if lines[j].strip() == '#else':
-                        lines.insert(j, aarch64_block + '\n')
-                        break
-                break
-        content = ''.join(lines)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
-        print("[PATCHED] AArch64 support added to q_platform.h (fallback insertion).")
-        return True
-
-    print("[WARN] Could not find insertion point for AArch64 in q_platform.h")
+    print("[WARN] Could not find insertion point in q_platform.h")
     return False
 
 
 # ===========================================================================
-# NEON & SIMD injection
+# NEON math injection
 # ===========================================================================
 
 def inject_neon_math(filepath="code/qcommon/q_math.c"):
-    """
-    Replace Q_rsqrt with a NEON-accelerated version for AArch64.
-    Uses vrsqrteq_f32 + one Newton-Raphson step for ~23-bit precision.
-    """
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return
@@ -166,11 +161,9 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
     neon_code = (
         "#if defined(__aarch64__)\n"
         "#include <arm_neon.h>\n"
-        "/* NEON-accelerated Q_rsqrt for AArch64 Cortex-A35 */\n"
         "float Q_rsqrt(float number) {\n"
         "    float32x4_t v = vdupq_n_f32(number);\n"
         "    float32x4_t vr = vrsqrteq_f32(v);\n"
-        "    /* One Newton-Raphson iteration for ~23-bit precision */\n"
         "    vr = vmulq_f32(vr, vrsqrtsq_f32(vmulq_f32(v, vr), vr));\n"
         "    return vgetq_lane_f32(vr, 0);\n"
         "}\n"
@@ -198,8 +191,12 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
     print("[PATCHED] NEON-accelerated Q_rsqrt injected into q_math.c.")
 
 
-def inject_openmp_simd(filepath, target_string, alignment_var="vertices"):
-    """Inject #pragma omp simd aligned(...) before heavy loops."""
+# ===========================================================================
+# SIMD loop injection (robust, pattern-based)
+# ===========================================================================
+
+def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
+    """Inject a SIMD pragma before the first match of a regex pattern."""
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return
@@ -210,67 +207,75 @@ def inject_openmp_simd(filepath, target_string, alignment_var="vertices"):
         print(f"[SKIP] OpenMP SIMD already present in {filepath}")
         return
 
-    if target_string not in content:
-        print(f"[WARN] Target loop not found in {filepath}: {target_string[:60]}...")
+    match = re.search(pattern, content)
+    if not match:
+        print(f"[WARN] Pattern not found in {filepath} ({description}) - skipping.")
         return
 
+    insert_pos = match.start()
     pragma = f"#pragma omp simd aligned({alignment_var}: 16)\n\t"
-    content = content.replace(target_string, pragma + target_string, 1)
+    content = content[:insert_pos] + pragma + content[insert_pos:]
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
-    print(f"[PATCHED] OpenMP SIMD pragma injected into {filepath}.")
+    print(f"[PATCHED] SIMD pragma injected into {filepath} ({description}).")
+
+
+def find_and_patch_simd_loops():
+    """
+    Locate the hot loops in tr_mesh.c and bg_pmove.c and inject SIMD pragmas.
+    Uses glob-based discovery + flexible regex to survive code variations.
+    """
+    # ---- tr_mesh.c : vertex transformation loop ----
+    tr_mesh_candidates = glob.glob("code/**/tr_mesh.c", recursive=True)
+    if tr_mesh_candidates:
+        tr_mesh = tr_mesh_candidates[0]
+        inject_simd_by_pattern(
+            tr_mesh,
+            pattern=r'(for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*numVerts\s*;)',
+            alignment_var='vertices',
+            description="tr_mesh.c vertex loop"
+        )
+    else:
+        print("[WARN] tr_mesh.c not found anywhere under code/")
+
+    # ---- bg_pmove.c : touch-entity loop ----
+    bg_pmove_candidates = glob.glob("code/**/bg_pmove.c", recursive=True)
+    if bg_pmove_candidates:
+        bg_pmove = bg_pmove_candidates[0]
+        inject_simd_by_pattern(
+            bg_pmove,
+            pattern=r'(for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*pm->numtouch\s*;)',
+            alignment_var='pm->touchents',
+            description="bg_pmove.c touch loop"
+        )
+    else:
+        print("[WARN] bg_pmove.c not found anywhere under code/")
 
 
 # ===========================================================================
-# mimalloc (with CMake >= 3.18 workaround)
+# mimalloc
 # ===========================================================================
 
 def install_newer_cmake():
-    """
-    Install a recent CMake via pip.
-
-    Ubuntu 20.04 ships CMake 3.16.3, but mimalloc requires >= 3.18.
-    The 'cmake' pip package provides a recent binary and is installed
-    into /usr/local/bin, which takes precedence over /usr/bin/cmake.
-    """
+    """Install a recent CMake via pip (Ubuntu 20.04 ships 3.16, mimalloc needs >= 3.18)."""
     print("[INFO] Upgrading CMake via pip (requires >= 3.18 for mimalloc)...")
-    subprocess.run(
-        ["python3", "-m", "pip", "install", "--upgrade", "pip"],
-        check=True
-    )
-    subprocess.run(
-        ["python3", "-m", "pip", "install", "cmake>=3.18"],
-        check=True
-    )
-    # Verify the new version is picked up
-    result = subprocess.run(
-        ["cmake", "--version"],
-        capture_output=True, text=True, check=True
-    )
-    print(f"[INFO] CMake version now: {result.stdout.strip().splitlines()[0]}")
-    # Verify CMake version >= 3.18
+    subprocess.run(["python3", "-m", "pip", "install", "--upgrade", "pip"], check=True)
+    subprocess.run(["python3", "-m", "pip", "install", "cmake>=3.18"], check=True)
+    result = subprocess.run(["cmake", "--version"], capture_output=True, text=True, check=True)
     version_line = result.stdout.strip().splitlines()[0]
+    print(f"[INFO] CMake version now: {version_line}")
     match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_line)
     if not match:
         raise RuntimeError(f"Could not parse CMake version from: {version_line}")
     major, minor = int(match.group(1)), int(match.group(2))
     if (major, minor) < (3, 18):
-        raise RuntimeError(
-            f"CMake version still too old: {version_line}. "
-            f"Need >= 3.18 for mimalloc."
-        )
+        raise RuntimeError(f"CMake version still too old: {version_line}. Need >= 3.18.")
 
 
 def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
-    """
-    Clone, build, and install mimalloc as a shared library.
-    Built with the same Cortex-A35 flags as the game.
-    Requires CMake >= 3.18 (installed via pip before calling this).
-    """
     mimalloc_src = "/tmp/mimalloc-src"
     mimalloc_build = "/tmp/mimalloc-build"
-
     if os.path.exists(mimalloc_src):
         shutil.rmtree(mimalloc_src)
     if os.path.exists(mimalloc_build):
@@ -282,7 +287,6 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
          "https://github.com/microsoft/mimalloc.git", mimalloc_src],
         check=True
     )
-
     os.makedirs(mimalloc_build, exist_ok=True)
 
     mimalloc_cflags = (
@@ -300,27 +304,18 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
          "-DMI_BUILD_OBJECT=OFF",
          f"-DCMAKE_C_FLAGS={mimalloc_cflags}",
          f"-DCMAKE_INSTALL_PREFIX={os.path.abspath(install_prefix)}"],
-        cwd=mimalloc_build,
-        check=True
+        cwd=mimalloc_build, check=True
     )
 
     print("[INFO] Building mimalloc...")
-    subprocess.run(
-        ["make", "-j", str(os.cpu_count() or 2)],
-        cwd=mimalloc_build,
-        check=True
-    )
+    subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=mimalloc_build, check=True)
 
     print("[INFO] Installing mimalloc to build output...")
-    subprocess.run(
-        ["make", "install"],
-        cwd=mimalloc_build,
-        check=True
-    )
+    subprocess.run(["make", "install"], cwd=mimalloc_build, check=True)
 
     mod_dir = os.path.join(install_prefix, "smokinguns")
     os.makedirs(mod_dir, exist_ok=True)
-    for lib in ["libmimalloc.so", "libmimalloc.so.3"]:
+    for lib in ["libmimalloc.so", "libmimalloc.so.3", "libmimalloc.so.3.5"]:
         src_lib = os.path.join(install_prefix, "lib", lib)
         if os.path.exists(src_lib):
             shutil.copy2(src_lib, os.path.join(mod_dir, lib))
@@ -330,14 +325,10 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
 
 
 # ===========================================================================
-# Mirror download (.pk3 only, excludes sg_pak0.pk3)
+# Mirror download
 # ===========================================================================
 
 def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max_depth=10):
-    """
-    Recursively crawl and download only .pk3 files from the Smokin' Guns mirror.
-    sg_pak0.pk3 is excluded (already provided by the existing port installation).
-    """
     if max_depth <= 0:
         return
     active_url = urllib.parse.urljoin(base_url, current_subpath)
@@ -345,16 +336,12 @@ def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max
         req = urllib.request.Request(active_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=60) as response:
             html_content = response.read().decode('utf-8', errors='ignore')
-
         parser = DirectoryParser()
         parser.feed(html_content)
-
         local_dir = os.path.join(target_base_dir, current_subpath)
         os.makedirs(local_dir, exist_ok=True)
-
         if parser.files:
             print(f"  Found {len(parser.files)} .pk3 file(s) in {active_url}")
-
         for filename in sorted(set(parser.files)):
             file_url = urllib.parse.urljoin(active_url, filename)
             dest_path = os.path.join(local_dir, filename)
@@ -373,13 +360,10 @@ def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max
                         os.remove(dest_path)
                     except OSError:
                         pass
-
         for subdir in sorted(set(parser.subdirs)):
             clean_subdir = subdir.lstrip('/')
             next_subpath = os.path.join(current_subpath, clean_subdir)
-            crawl_and_download_mirror(
-                base_url, target_base_dir, next_subpath, max_depth - 1
-            )
+            crawl_and_download_mirror(base_url, target_base_dir, next_subpath, max_depth - 1)
     except Exception as e:
         print(f"[ERROR] Crawling {active_url}: {e}")
 
@@ -389,7 +373,6 @@ def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max
 # ===========================================================================
 
 def write_autoexec(output_mod_dir):
-    """Write an autoexec.cfg with maximum performance cvars."""
     os.makedirs(output_mod_dir, exist_ok=True)
     autoexec_path = os.path.join(output_mod_dir, "autoexec.cfg")
     if os.path.exists(autoexec_path):
@@ -417,51 +400,10 @@ def write_autoexec(output_mod_dir):
 # ===========================================================================
 
 def fix_git_safe_directory():
-    """Prevent 'dubious ownership' git errors inside Docker."""
     subprocess.run(
         ["git", "config", "--global", "--add", "safe.directory", "/work"],
         check=False, capture_output=True
     )
-
-
-def find_and_patch_simd_loops():
-    """
-    Locate tr_mesh.c and bg_pmove.c in the source tree and inject SIMD pragmas.
-    Searches under code/ for the files to be robust against layout changes.
-    """
-    # Known relative paths from the SmokinGuns repository root
-    candidates = {
-        "tr_mesh.c": "code/renderer/tr_mesh.c",
-        "bg_pmove.c": "code/game/bg_pmove.c",
-    }
-
-    # Also search broadly in case the layout differs
-    for root, _dirs, files in os.walk("code"):
-        for fname in list(candidates.keys()):
-            if fname in files:
-                candidates[fname] = os.path.join(root, fname)
-
-    # tr_mesh.c - vertex transformation loop (renderer hot path)
-    tr_mesh = candidates.get("tr_mesh.c")
-    if tr_mesh and os.path.exists(tr_mesh):
-        inject_openmp_simd(
-            tr_mesh,
-            'for ( i = 0 ; i < numVerts ; i++ )',
-            alignment_var='vertices'
-        )
-    else:
-        print("[WARN] tr_mesh.c not found anywhere under code/")
-
-    # bg_pmove.c - player movement touch loop (game physics hot path)
-    bg_pmove = candidates.get("bg_pmove.c")
-    if bg_pmove and os.path.exists(bg_pmove):
-        inject_openmp_simd(
-            bg_pmove,
-            'for ( i = 0 ; i < pml.numtouch ; i++ )',
-            alignment_var='pml.touchents'
-        )
-    else:
-        print("[WARN] bg_pmove.c not found anywhere under code/")
 
 
 # ===========================================================================
@@ -475,23 +417,17 @@ def main():
 
     fix_git_safe_directory()
 
-    # --- Source patches --------------------------------------------------
     patch_makefile('Makefile')
     patch_q_platform('code/qcommon/q_platform.h')
     inject_neon_math('code/qcommon/q_math.c')
     find_and_patch_simd_loops()
 
-    # --- Build mimalloc (needs CMake >= 3.18) ----------------------------
     install_newer_cmake()
     build_and_install_mimalloc()
 
-    # --- Compilation -----------------------------------------------------
     cpu_count = os.cpu_count() or 2
     cc = os.environ.get("CC", "gcc")
 
-    # Cortex-A35 optimization flags.
-    # -fno-unroll-loops: avoids I-cache thrashing on in-order A35.
-    # -fno-semantic-interposition: lets compiler inline across .so boundaries.
     optimize_flags = (
         "-O3 "
         "-mcpu=cortex-a35 "
@@ -531,7 +467,6 @@ def main():
     print(f"[INFO] OPTIMIZE flags: {optimize_flags}\n")
     subprocess.run(compile_cmd, shell=True, check=True)
 
-    # --- Mirror .pk3 game assets ------------------------------------------
     mirror_root = "http://download.smokin-guns.org/mirror.9k.lv/smokinguns/smokinguns/"
     output_mod_dir = "build/release-linux-aarch64/smokinguns"
     print(f"\n[INFO] Mirroring .pk3 assets from {mirror_root}")
@@ -539,7 +474,6 @@ def main():
     print(f"[INFO] Excluded: sg_pak0.pk3 (370 MB base package)\n")
     crawl_and_download_mirror(mirror_root, output_mod_dir)
 
-    # --- Write autoexec.cfg -----------------------------------------------
     write_autoexec(output_mod_dir)
 
     print("\n" + "=" * 60)
