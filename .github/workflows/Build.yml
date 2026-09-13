@@ -1,4 +1,4 @@
-name: Create my Smokin' Guns for RK3326 (PortMaster) - SDL12-Compat ARM64 Build
+name: Baue mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -45,9 +45,12 @@ jobs:
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
           apt-get update
+          # libsdl1.2-dev provides the SDL 1.2 headers (/usr/include/SDL/SDL.h)
+          # that the unpatched Smokin' Guns source needs.
+          # libsdl2-dev is required to build sdl12-compat itself.
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 ccache \
-            libsdl2-dev \
+            libsdl1.2-dev libsdl2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
@@ -86,7 +89,9 @@ jobs:
           cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
 
           # ----------------------------------------------------------------
-          # libsdl1.2-compat
+          # sdl12-compat (SDL 1.2 API on top of SDL2/KMSDRM)
+          # -fvisibility=default ensures every SDL 1.2 symbol (including
+          # SDL_JoystickClose) is exported, regardless of declaration style.
           # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d sdl12-compat ]; then
@@ -94,19 +99,15 @@ jobs:
           fi
           cd sdl12-compat
 
-          echo "==> Applying sdl12-compat hint patch..."
+          echo "==> Patching sdl12-compat..."
           python3 /work/patch_arm64.py
 
-          # Verify the hint patch landed in the file
           if ! grep -q "SDL_HINT_VIDEODRIVER" src/SDL12_compat.c; then
             echo "[ERROR] SDL_HINT_VIDEODRIVER was not patched into SDL12_compat.c"
             exit 1
           fi
 
           mkdir -p build && cd build
-          # -fvisibility=default is the actual fix for exporting all SDL 1.2
-          # symbols (including SDL_JoystickClose) regardless of how they are
-          # declared inside the source files.
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
             -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
@@ -125,16 +126,17 @@ jobs:
           echo "[OK] libSDL-1.2.so.0 exports SDL_JoystickClose"
           cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
+          # sdl12-compat needs SDL2 at runtime.
           cp /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /work/out/libs.aarch64/libSDL2-2.0.so.0
 
           # ----------------------------------------------------------------
-          # Smokin' Guns
+          # Smokin' Guns (source unverändert, kompiliert gegen SDL 1.2 Header)
           # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
           cd SmokinGuns
 
-          echo "==> Applying ARM64 patch script..."
+          echo "==> Patching Smokin' Guns (Makefile + q_platform.h only)..."
           python3 /work/patch_arm64.py
 
           if grep -q '\$(B)/\$(BASENAME)/ui/ui_syscalls.o' Makefile; then
@@ -144,7 +146,7 @@ jobs:
 
           rm -rf build/release-linux-aarch64/ || true
 
-          echo "==> Building Smokin' Guns (native SO, REND1 only)"
+          echo "==> Building Smokin' Guns (native SO, sdl12-compat)"
           make release -j"$(nproc)" \
             PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             CC="$CC" \
@@ -153,7 +155,7 @@ jobs:
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
             WERROR=0 \
-            CFLAGS="-w -fcommon -I/usr/include/SDL2" \
+            CFLAGS="-w -fcommon" \
             OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
 
           BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
@@ -173,6 +175,8 @@ jobs:
 
           echo "==> Layout of /work/out/game:"
           ls -la /work/out/game/
+          echo "==> Layout of /work/out/libs.aarch64:"
+          ls -la /work/out/libs.aarch64/
           file /work/out/game/smokinguns.aarch64
           file /work/out/libs.aarch64/libGL.so.1
           file /work/out/libs.aarch64/libEGL.so.1
@@ -205,9 +209,9 @@ jobs:
             find work/out/game/modules -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \;
           fi
 
-          cp work/out/libs.aarch64/libGL.so.1      "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
-          cp work/out/libs.aarch64/libEGL.so.1     "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
-          cp work/out/libs.aarch64/libSDL-1.2.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
+          cp work/out/libs.aarch64/libGL.so.1       "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
+          cp work/out/libs.aarch64/libEGL.so.1      "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
+          cp work/out/libs.aarch64/libSDL-1.2.so.0  "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
           cp work/out/libs.aarch64/libSDL2-2.0.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL2-2.0.so.0"
 
           cat > "$PKG/${PORT_DIR}/smokinguns.gptk" << 'GPTK_EOF'
@@ -256,7 +260,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and SDL1.2-compat (SDL2/KMSDRM backend). Cortex-A35 optimized.",
+              "desc": "Native ARM64 build with GL4ES and sdl12-compat (KMSDRM backend). Cortex-A35 optimized. Native .so modules.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -272,7 +276,7 @@ jobs:
           GAMEDIR="/roms/ports/smokinguns"
           LOG_FILE="${GAMEDIR}/debug.log"
           exec > >(tee -a "$LOG_FILE") 2>&1
-          echo "=== Smokin' Guns launch ==="
+          echo "=== Smokin' Guns launch (sdl12-compat) ==="
           echo "Date: $(date)"
 
           XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
