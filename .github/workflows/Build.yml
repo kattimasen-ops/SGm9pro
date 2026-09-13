@@ -15,21 +15,35 @@ jobs:
       - name: Clone Official Smokin' Guns Source Code
         run: |
           git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git temp_source
-          # Move source files into the root workspace so your scripts and make find them natively
           cp -r temp_source/* .
           rm -rf temp_source
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
+      # ccache beschleunigt nur wiederholte CI-Laeufe (Build-Zeit), hat
+      # keinen Einfluss auf die spaetere Laufzeit-Performance des Spiels.
+      - name: Cache ccache directory
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-aarch64-${{ github.sha }}
+          restore-keys: |
+            ccache-aarch64-
+
       - name: Build inside ARM64 Docker Container
         run: |
-          docker run --rm --privileged --platform linux/arm64 -v ${{ github.workspace }}:/work arm64v8/ubuntu:20.04 bash -c "
+          mkdir -p .ccache
+          docker run --rm --privileged --platform linux/arm64 \
+            -v ${{ github.workspace }}:/work \
+            -v ${{ github.workspace }}/.ccache:/root/.ccache \
+            -e CC="ccache gcc" \
+            arm64v8/ubuntu:20.04 bash -c "
             export DEBIAN_FRONTEND=noninteractive
-            apt-get update && apt-get install -y build-essential python3 git libsdl2-dev libopenal-dev libcurl4-openssl-dev
+            apt-get update && apt-get install -y build-essential python3 git libsdl2-dev libopenal-dev libcurl4-openssl-dev python3-urllib3 ccache
+            ccache -M 2G
             cd /work
             python3 .github/scripts/patch_arm64.py
-            make -j$(nproc) ARCH=aarch64 BUILD_GAME_SO=1 OPTIMIZE=\"-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-math-errno -fno-trapping-math -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon -fopenmp-simd -flax-vector-conversions -mearly-ra=all\" LDFLAGS=\"-Wl,-O1 -Wl,--as-needed -Wl,--strip-all\"
           "
 
       - name: Upload Build Artifacts
