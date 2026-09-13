@@ -35,13 +35,13 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # ---- Fix upstream typo: BASENAME -> BASEGAME in Q3UIOBJ ----------
-    if "$(B)/$(BASENAME)/ui/ui_syscalls.o" in content:
+    # ---- Fix upstream typo: All BASENAME instances in UI objects ----
+    if "$(B)/$(BASENAME)/ui/" in content:
         content = content.replace(
-            "$(B)/$(BASENAME)/ui/ui_syscalls.o",
-            "$(B)/$(BASEGAME)/ui/ui_syscalls.o",
+            "$(B)/$(BASENAME)/ui/",
+            "$(B)/$(BASEGAME)/ui/"
         )
-        print("[PATCHED] Makefile: BASENAME -> BASEGAME in Q3UIOBJ")
+        print("[PATCHED] Makefile: Alle BASENAME -> BASEGAME in UI-Objekten korrigiert")
 
     # ---- Inject the SDL 1.2 include path as a global override --------
     sdl_include_line = "override CFLAGS += -I/usr/include/SDL\n"
