@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Smokin' Guns ARM64 (RK3326 / Cortex-A35) build patcher.
-Fixes ARCH_STRING, injects NEON math, OpenMP SIMD, builds mimalloc,
-mirrors .pk3 game assets, and writes a performance autoexec.cfg.
+Fixes ARCH_STRING, SDL_CFLAGS/SDL_LIBS, injects NEON math, OpenMP SIMD,
+builds mimalloc, mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 """
 
 import os
@@ -41,15 +41,18 @@ class DirectoryParser(html.parser.HTMLParser):
 
 
 # ===========================================================================
-# Makefile patch (SAFE - no ifeq/endif blocks)
+# Makefile patch (ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, ARCH_STRING,
+#                 SDL_CFLAGS / SDL_LIBS from sdl2-config)
 # ===========================================================================
 
 def patch_makefile(filepath="Makefile"):
     """
     Patch Makefile safely:
       - ARCH, BUILD_GAME_SO, BUILD_GAME_QVM
-      - WIDTH single-line replacement (no ifeq/endif to avoid syntax breakage)
+      - WIDTH single-line replacement
       - ARCH_STRING via CFLAGS
+      - SDL_CFLAGS / SDL_LIBS explicitly from sdl2-config
+        (fixes 'SDL.h: No such file or directory' when pkg-config fails)
     """
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
@@ -57,7 +60,7 @@ def patch_makefile(filepath="Makefile"):
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
-    # Force ARCH values
+    # --- Force ARCH values ---
     content = re.sub(r'^ARCH\s*\?=\s*.*$',
                      'ARCH ?= aarch64', content, flags=re.MULTILINE)
     content = re.sub(r'^BUILD_GAME_SO\s*\?=\s*.*$',
@@ -65,15 +68,14 @@ def patch_makefile(filepath="Makefile"):
     content = re.sub(r'^BUILD_GAME_QVM\s*\?=\s*.*$',
                      'BUILD_GAME_QVM ?= 0', content, flags=re.MULTILINE)
 
-    # Safe WIDTH patch: single-line replacement only. No ifeq/endif block.
-    # This just adds a fallback so tput doesn't return an empty string.
+    # --- Safe WIDTH patch ---
     content = re.sub(
         r'WIDTH\s*:=\s*\$\(shell\s+tput\s+cols[^\)]*\)',
         'WIDTH := $(shell tput cols 2>/dev/null || echo 80)',
         content
     )
 
-    # Pass ARCH_STRING to the compiler via CFLAGS (ioquake3 recommended way)
+    # --- Pass ARCH_STRING to the compiler via CFLAGS ---
     if '-DARCH_STRING=' not in content:
         content = re.sub(
             r'^(CFLAGS\s*\+=)',
@@ -81,9 +83,35 @@ def patch_makefile(filepath="Makefile"):
             content, count=1, flags=re.MULTILINE
         )
 
+    # --- SDL_CFLAGS / SDL_LIBS from sdl2-config ---
+    # The upstream Makefile tries pkg-config first and falls back to
+    # sdl2-config.  In minimal Docker images, pkg-config may fail silently
+    # and the fallback may also not be reached (e.g. if 'which' is missing).
+    # We append explicit assignments AFTER the existing SDL section so they
+    # always win.  This is the fix recommended by the ioquake3 community.
+    sdl_fix = (
+        "\n"
+        "# ---- SDL2 flags override (added by patch_arm64.py) ----\n"
+        "SDL_CFLAGS = $(shell sdl2-config --cflags 2>/dev/null)\n"
+        "SDL_LIBS = $(shell sdl2-config --libs 2>/dev/null)\n"
+        "ifneq ($(SDL_CFLAGS),)\n"
+        "  CFLAGS += $(SDL_CFLAGS)\n"
+        "endif\n"
+        "ifneq ($(SDL_LIBS),)\n"
+        "  CLIENT_LIBS += $(SDL_LIBS)\n"
+        "endif\n"
+        "# ---- end SDL2 flags override ----\n"
+    )
+
+    if 'SDL2 flags override' not in content:
+        # Insert near the end of the file (after all normal assignments)
+        # so our values are not overwritten later.
+        content = content.rstrip() + "\n" + sdl_fix + "\n"
+
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
-    print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, WIDTH, ARCH_STRING")
+    print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, "
+          "WIDTH, ARCH_STRING, SDL_CFLAGS/SDL_LIBS")
     return True
 
 
@@ -187,11 +215,10 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
 
 
 # ===========================================================================
-# SIMD loop injection (only bg_pmove.c; tr_mesh.c pattern too variable)
+# SIMD loop injection (only bg_pmove.c)
 # ===========================================================================
 
 def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
-    """Inject a SIMD pragma before the first match of a regex pattern."""
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return
@@ -217,12 +244,6 @@ def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
 
 
 def find_and_patch_simd_loops():
-    """
-    Inject SIMD pragma only into the bg_pmove.c touch loop, which has a
-    stable pattern. The tr_mesh.c vertex loop uses several formatting
-    variants across renderergl1/renderergl2/renderer; we skip it to
-    avoid fragile matching.
-    """
     bg_pmove_candidates = glob.glob("code/**/bg_pmove.c", recursive=True)
     if bg_pmove_candidates:
         inject_simd_by_pattern(
@@ -236,11 +257,10 @@ def find_and_patch_simd_loops():
 
 
 # ===========================================================================
-# mimalloc (CMake >= 3.18 via pip)
+# mimalloc
 # ===========================================================================
 
 def install_newer_cmake():
-    """Install recent CMake via pip (Ubuntu 20.04 ships 3.16, mimalloc needs >= 3.18)."""
     print("[INFO] Upgrading CMake via pip (requires >= 3.18 for mimalloc)...")
     subprocess.run(["python3", "-m", "pip", "install", "--upgrade", "pip"], check=True)
     subprocess.run(["python3", "-m", "pip", "install", "cmake>=3.18"], check=True)
@@ -307,7 +327,7 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
 
 
 # ===========================================================================
-# Mirror download (.pk3 only, excludes sg_pak0.pk3)
+# Mirror download
 # ===========================================================================
 
 def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max_depth=10):
