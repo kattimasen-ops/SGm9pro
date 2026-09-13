@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Patch Smokin' Guns and sdl12-compat for ARM64 build.
+Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
 Can be invoked from:
   - the SmokinGuns source root (patches Makefile + q_platform.h)
@@ -26,7 +26,7 @@ def diagnostic_dump():
 
 
 def patch_makefile():
-    """Patch the Smokin' Guns Makefile."""
+    """Patch the Smokin' Guns Makefile safely without altering execution logic."""
     makefile = "Makefile"
     if not os.path.exists(makefile):
         print(f"[WARN] {makefile} not found - skipping")
@@ -35,21 +35,21 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # ---- Fix upstream typo: All BASENAME instances in UI objects ----
+    # Fix upstream typo: All BASENAME instances in UI objects
     if "$(B)/$(BASENAME)/ui/" in content:
         content = content.replace(
             "$(B)/$(BASENAME)/ui/",
             "$(B)/$(BASEGAME)/ui/"
         )
-        print("[PATCHED] Makefile: Alle BASENAME -> BASEGAME in UI-Objekten korrigiert")
+        print("[PATCHED] Makefile: Corrected BASENAME -> BASEGAME in UI objects")
 
-    # ---- Inject the SDL 1.2 include path as a global override --------
+    # Inject the SDL 1.2 include path as a global override
     sdl_include_line = "override CFLAGS += -I/usr/include/SDL\n"
     if "override CFLAGS += -I/usr/include/SDL" not in content:
         content = sdl_include_line + content
         print("[PATCHED] Makefile: added -I/usr/include/SDL to global CFLAGS")
 
-    # ---- Hygiene -----------------------------------------------------
+    # Hygiene and cleanups
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
     content = content.replace("python ", "python3 ")
     content = content.replace("python2 ", "python3 ")
@@ -58,7 +58,7 @@ def patch_makefile():
     content = re.sub(r"-Wuninitialized", "", content)
     content = re.sub(r"-Wstrict-overflow", "", content)
 
-    # ---- Remove toxic x86/architecture flags -------------------------
+    # Remove toxic x86 architecture flags that trip up ARM GCC
     toxic_flags = [
         "-m32", "-m64", 
         "-march=native", "march=native", 
@@ -74,7 +74,7 @@ def patch_makefile():
 
 
 def patch_q_platform():
-    """Patch every q_platform.h under code/ so aarch64 is recognised."""
+    """Patch q_platform.h under code/ so aarch64 target is defined."""
     patched = 0
     if not os.path.isdir("code"):
         print("[WARN] code/ not found - skipping q_platform.h patches")
