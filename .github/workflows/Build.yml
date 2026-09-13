@@ -16,13 +16,12 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git temp_source
           cp -r temp_source/* .
+          cp -r temp_source/.github . 2>/dev/null || true
           rm -rf temp_source
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # ccache beschleunigt nur wiederholte CI-Laeufe (Build-Zeit), hat
-      # keinen Einfluss auf die spaetere Laufzeit-Performance des Spiels.
       - name: Cache ccache directory
         uses: actions/cache@v4
         with:
@@ -38,9 +37,13 @@ jobs:
             -v ${{ github.workspace }}:/work \
             -v ${{ github.workspace }}/.ccache:/root/.ccache \
             -e CC="ccache gcc" \
+            -e TERM="dumb" \
             arm64v8/ubuntu:20.04 bash -c "
             export DEBIAN_FRONTEND=noninteractive
-            apt-get update && apt-get install -y build-essential python3 git libsdl2-dev libopenal-dev libcurl4-openssl-dev python3-urllib3 ccache
+            apt-get update && apt-get install -y \
+              build-essential python3 git \
+              libsdl2-dev libopenal-dev libcurl4-openssl-dev \
+              python3-urllib3 ccache
             ccache -M 2G
             cd /work
             python3 .github/scripts/patch_arm64.py
