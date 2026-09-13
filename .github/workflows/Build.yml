@@ -1,4 +1,4 @@
-name: Baue mir Smokin' Guns for RK3326 (PortMaster)
+name: Baue jetzt Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -45,9 +45,6 @@ jobs:
           export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
           apt-get update
-          # libsdl1.2-dev provides the SDL 1.2 headers (/usr/include/SDL/SDL.h)
-          # that the unpatched Smokin' Guns source needs.
-          # libsdl2-dev is required to build sdl12-compat itself.
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 ccache \
             libsdl1.2-dev libsdl2-dev \
@@ -89,9 +86,7 @@ jobs:
           cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
 
           # ----------------------------------------------------------------
-          # sdl12-compat (SDL 1.2 API on top of SDL2/KMSDRM)
-          # -fvisibility=default ensures every SDL 1.2 symbol (including
-          # SDL_JoystickClose) is exported, regardless of declaration style.
+          # sdl12-compat
           # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d sdl12-compat ]; then
@@ -119,18 +114,15 @@ jobs:
 
           if ! nm -D --defined-only "$SDL12_LIB" | grep -q ' SDL_JoystickClose$' ; then
             echo "[ERROR] libSDL-1.2.so.0 does not export SDL_JoystickClose"
-            echo "--- exported joystick symbols (if any) ---"
-            nm -D --defined-only "$SDL12_LIB" | grep -i joystick || true
             exit 1
           fi
           echo "[OK] libSDL-1.2.so.0 exports SDL_JoystickClose"
           cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
 
-          # sdl12-compat needs SDL2 at runtime.
           cp /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /work/out/libs.aarch64/libSDL2-2.0.so.0
 
           # ----------------------------------------------------------------
-          # Smokin' Guns (source unverändert, kompiliert gegen SDL 1.2 Header)
+          # Smokin' Guns
           # ----------------------------------------------------------------
           cd /work/src
           if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
@@ -150,7 +142,7 @@ jobs:
           make release -j"$(nproc)" \
             PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             CC="$CC" \
-            BUILD_STANDALONE=1 BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
+            BUILD_STANDALONE=1 Q3UIDIR=code/q3_ui BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             BUILD_RENDERER_REND2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
@@ -173,15 +165,6 @@ jobs:
             find "$BUILD_OUT/smokinguns" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/modules/ \;
           fi
 
-          echo "==> Layout of /work/out/game:"
-          ls -la /work/out/game/
-          echo "==> Layout of /work/out/libs.aarch64:"
-          ls -la /work/out/libs.aarch64/
-          file /work/out/game/smokinguns.aarch64
-          file /work/out/libs.aarch64/libGL.so.1
-          file /work/out/libs.aarch64/libEGL.so.1
-          file /work/out/libs.aarch64/libSDL-1.2.so.0
-          file /work/out/libs.aarch64/libSDL2-2.0.so.0
           echo "Build finished successfully."
           BUILD_SCRIPT_EOF
           chmod +x work/build.sh
@@ -326,15 +309,6 @@ jobs:
 
           export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
 
-          echo "--- environment ---"
-          echo "SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
-          echo "SDL_AUDIODRIVER=$SDL_AUDIODRIVER"
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-          echo "--- drm devices ---"
-          ls -la /dev/dri/ 2>&1 || true
-          echo "--- input devices ---"
-          ls -la /dev/input/js* /dev/input/event* 2>&1 || true
-
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
           GPTOKEYB_PID=$!
 
@@ -351,6 +325,9 @@ jobs:
             +set r_customwidth 640 \
             +set r_customheight 480 \
             +set r_fullscreen 1 \
+            +set r_primitives 2 \
+            +set r_smp 0 \
+            +set cg_shadows 0 \
             +set fs_basepath "${GAMEDIR}" \
             +set fs_homepath "${GAMEDIR}" \
             +set fs_game smokinguns
