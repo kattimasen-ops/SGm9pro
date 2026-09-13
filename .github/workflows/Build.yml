@@ -1,4 +1,4 @@
-name: Baue jetzt Smokin' Guns for RK3326 (PortMaster)
+name: Bastel mir Smokin' Guns for RK3326 (PortMaster)
 
 on:
   workflow_dispatch:
@@ -47,12 +47,13 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential git pkg-config ca-certificates wget file zip python3 ccache \
-            libsdl1.2-dev libsdl2-dev \
+            libsdl1.2-dev \
             libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
             libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
             libcurl4-openssl-dev libopenal-dev libspeex-dev \
             libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
             libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev \
+            libudev-dev libasound2-dev libpulse-dev \
             autoconf automake libtool
           git config --global --add safe.directory '*'
 
@@ -86,6 +87,23 @@ jobs:
           cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
 
           # ----------------------------------------------------------------
+          # Compile Modern SDL2 (2.30) from Source
+          # ----------------------------------------------------------------
+          cd /work/src
+          if [ ! -d SDL ]; then git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git; fi
+          cd SDL
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
+            -DSDL_STATIC=OFF -DSDL_SHARED=ON \
+            -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
+          make -j"$(nproc)" install
+
+          SDL2_NEW="$(find /opt/sdl2 -name 'libSDL2-2.0.so.0' -print -quit)"
+          [ -n "$SDL2_NEW" ] || { echo "[ERROR] Modern SDL2 not found"; exit 1; }
+          cp "$SDL2_NEW" /work/out/libs.aarch64/libSDL2-2.0.so.0
+
+          # ----------------------------------------------------------------
           # sdl12-compat
           # ----------------------------------------------------------------
           cd /work/src
@@ -97,29 +115,16 @@ jobs:
           echo "==> Patching sdl12-compat..."
           python3 /work/patch_arm64.py
 
-          if ! grep -q "SDL_HINT_VIDEODRIVER" src/SDL12_compat.c; then
-            echo "[ERROR] SDL_HINT_VIDEODRIVER was not patched into SDL12_compat.c"
-            exit 1
-          fi
-
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DSDL2_INCLUDE_DIR=/usr/include/SDL2 \
-            -DSDL2_LIBRARY=/usr/lib/aarch64-linux-gnu/libSDL2.so \
+            -DSDL2_INCLUDE_DIR=/opt/sdl2/include/SDL2 \
+            -DSDL2_LIBRARY="$(find /opt/sdl2 -name 'libSDL2-2.0.so' -print -quit)" \
             -DCMAKE_C_FLAGS="$OPTIMIZE -fvisibility=default"
           make -j"$(nproc)"
 
           SDL12_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
           [ -n "$SDL12_LIB" ] || { echo "[ERROR] sdl12-compat lib not produced"; exit 1; }
-
-          if ! nm -D --defined-only "$SDL12_LIB" | grep -q ' SDL_JoystickClose$' ; then
-            echo "[ERROR] libSDL-1.2.so.0 does not export SDL_JoystickClose"
-            exit 1
-          fi
-          echo "[OK] libSDL-1.2.so.0 exports SDL_JoystickClose"
           cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
-
-          cp /usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /work/out/libs.aarch64/libSDL2-2.0.so.0
 
           # ----------------------------------------------------------------
           # Smokin' Guns
@@ -131,18 +136,13 @@ jobs:
           echo "==> Patching Smokin' Guns (Makefile + q_platform.h only)..."
           python3 /work/patch_arm64.py
 
-          if grep -q '\$(B)/\$(BASENAME)/ui/ui_syscalls.o' Makefile; then
-            echo "==> sed fallback applied for BASENAME typo"
-            sed -i 's|\$(B)/\$(BASENAME)/ui/ui_syscalls.o|$(B)/$(BASEGAME)/ui/ui_syscalls.o|g' Makefile
-          fi
-
           rm -rf build/release-linux-aarch64/ || true
 
           echo "==> Building Smokin' Guns (native SO, sdl12-compat)"
           make release -j"$(nproc)" \
             PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
             CC="$CC" \
-            BUILD_STANDALONE=1 Q3UIDIR=code/q3_ui BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
+            BUILD_STANDALONE=1 Q3UIDIR=code/ui BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
             BUILD_RENDERER_REND2=0 \
             USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
             USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
@@ -243,7 +243,7 @@ jobs:
             "attr": {
               "title": "Smokin' Guns",
               "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and sdl12-compat (KMSDRM backend). Cortex-A35 optimized. Native .so modules.",
+              "desc": "Native ARM64 build with GL4ES and sdl12-compat (KMSDRM backend). Cortex-A35 optimized.",
               "genres": ["fps", "shooter"],
               "porter_wallet": "",
               "image": {"screenshot": ""},
@@ -312,10 +312,10 @@ jobs:
           $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
           GPTOKEYB_PID=$!
 
-          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0:${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
+          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libSDL2-2.0.so.0:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0:${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
             "${GAMEDIR}/smokinguns.aarch64" \
             +set com_hunkMegs 256 \
-            +set com_maxfps 40 \
+            +set com_maxfps 60 \
             +set net_enabled 0 \
             +set sv_pure 0 \
             +set vm_cgame 0 \
