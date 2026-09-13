@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Patch Smokin' Guns for ARM64 / SDL1.2-compat on RK3326.
+Patch Smokin' Guns and sdl12-compat for ARM64 build.
 
-This script can be invoked from either:
-  - the SmokinGuns source root (patches Makefile + q_platform.h), or
-  - the sdl12-compat source root (patches SDL_HINT_* fallbacks).
+Can be invoked from:
+  - the SmokinGuns source root (patches Makefile + q_platform.h)
+  - the sdl12-compat source root (patches SDL_HINT_* fallbacks)
 
-Symbol visibility for sdl12-compat is NOT patched here. It is controlled
-by passing -fvisibility=default to the CMake build, which is the
-reliable way to export every symbol regardless of declaration style.
+The Smokin' Guns game source is NOT patched for SDL2. It stays on the
+SDL 1.2 API and is compiled against the real SDL 1.2 headers from
+libsdl1.2-dev. At runtime, sdl12-compat (built from source) provides
+the SDL 1.2 API on top of SDL2 / KMSDRM via LD_PRELOAD.
 """
 
 import os
@@ -31,6 +32,14 @@ def diagnostic_dump():
 
 
 def patch_makefile():
+    """Patch the Smokin' Guns Makefile.
+
+    - Fix the BASENAME -> BASEGAME typo in Q3UIOBJ.
+    - Add -I/usr/include/SDL to CFLAGS. The Makefile does not add this
+      path on its own for the Linux platform (verified against earlier
+      build logs).
+    - Remove the upstream rm/python/-Werror hygiene issues.
+    """
     makefile = "Makefile"
     if not os.path.exists(makefile):
         print(f"[WARN] {makefile} not found - skipping")
@@ -39,16 +48,25 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    before = content
-    content = content.replace(
-        "$(B)/$(BASENAME)/ui/ui_syscalls.o",
-        "$(B)/$(BASEGAME)/ui/ui_syscalls.o",
-    )
-    if content != before:
-        print("[PATCHED] Makefile: $(BASENAME) -> $(BASEGAME) in Q3UIOBJ")
+    # ---- Fix upstream typo: BASENAME -> BASEGAME in Q3UIOBJ ----------
+    if "$(B)/$(BASENAME)/ui/ui_syscalls.o" in content:
+        content = content.replace(
+            "$(B)/$(BASENAME)/ui/ui_syscalls.o",
+            "$(B)/$(BASEGAME)/ui/ui_syscalls.o",
+        )
+        print("[PATCHED] Makefile: BASENAME -> BASEGAME in Q3UIOBJ")
     else:
         print("[INFO] Makefile: BASENAME typo not present")
 
+    # ---- Inject the SDL 1.2 include path as a global override --------
+    sdl_include_line = "override CFLAGS += -I/usr/include/SDL\n"
+    if "override CFLAGS += -I/usr/include/SDL" not in content:
+        content = sdl_include_line + content
+        print("[PATCHED] Makefile: added -I/usr/include/SDL to global CFLAGS")
+    else:
+        print("[INFO] Makefile: SDL include override already present")
+
+    # ---- Hygiene -----------------------------------------------------
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
     content = content.replace("python ", "python3 ")
     content = content.replace("python2 ", "python3 ")
@@ -59,11 +77,12 @@ def patch_makefile():
 
     with open(makefile, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] Makefile: hygiene")
+    print("[PATCHED] Makefile: hygiene applied")
     return True
 
 
 def patch_q_platform():
+    """Patch every q_platform.h under code/ so aarch64 is recognised."""
     patched = 0
     if not os.path.isdir("code"):
         print("[WARN] code/ not found - skipping q_platform.h patches")
@@ -81,6 +100,8 @@ def patch_q_platform():
                 continue
 
             changed = False
+
+            # Preferred: add an #elif right after the ARM32 branch.
             pattern = re.compile(
                 r'(#elif defined __arm__\s*\n#define ARCH_STRING "arm"\s*\n)'
             )
@@ -92,6 +113,7 @@ def patch_q_platform():
                 content = new_content
                 changed = True
             else:
+                # Fallback: prepend a hard override block.
                 override = (
                     "/* [PATCHED] ARM64 ARCH_STRING override */\n"
                     "#if defined(__aarch64__) || defined(__arm64__) || defined(aarch64)\n"
@@ -114,14 +136,13 @@ def patch_q_platform():
 
 
 def patch_sdl12_compat_hints():
-    """Define SDL_HINT_VIDEODRIVER and SDL_HINT_AUDIODRIVER for SDL2 < 2.0.22.
+    """Prepend SDL_HINT_* fallbacks to sdl12-compat/src/SDL12_compat.c.
 
-    Ubuntu 20.04 ships SDL 2.0.10, which lacks these hints. They were only
-    formalised as SDL_HINT_* macros in SDL 2.0.22.
-
-    The definitions are inserted at the very top of the file, before any
-    #include or code. This is safe because the file does not define these
-    macros itself and the guards prevent duplicate definitions.
+    Ubuntu 20.04 ships SDL 2.0.10, which does not yet define
+    SDL_HINT_VIDEODRIVER or SDL_HINT_AUDIODRIVER. These were added as
+    formal macros in SDL 2.0.22. The definitions must be inserted at
+    the very top of the file so they are visible before the first use
+    in SDL_InitSubSystem.
     """
     path = os.path.join("src", "SDL12_compat.c")
     if not os.path.exists(path):
@@ -153,7 +174,7 @@ def patch_sdl12_compat_hints():
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] sdl12-compat: SDL_HINT_VIDEODRIVER / SDL_HINT_AUDIODRIVER defined")
+    print("[PATCHED] sdl12-compat: SDL_HINT_* fallbacks inserted at top of file")
     return True
 
 
