@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smokin' Guns ARM64 (RK3326 / Cortex-A35) build patcher.
-Fixes ARCH_STRING, SDL12-compat, injects NEON math, OpenMP SIMD,
+Fixes ARCH_STRING, SDL12-compat (v1.2.58), injects NEON math, OpenMP SIMD,
 builds mimalloc, mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 """
 
@@ -41,15 +41,14 @@ class DirectoryParser(html.parser.HTMLParser):
 
 
 # ===========================================================================
-# libsdl12-compat from source (patched version)
+# libsdl12-compat v1.2.58 (compatible with SDL 2.0.10)
 # ===========================================================================
 
 def build_libsdl12_compat(install_prefix="/usr/local"):
     """
-    Build a recent, patched version of libsdl12-compat from source.
-    This provides the SDL 1.2 compatibility headers (SDL_keysym.h,
-    SDL_keysym.h, etc.) that SmokinGuns needs, while using SDL2 behind
-    the scenes. This fixes the 'SDL_keysym' build errors.
+    Build libsdl12-compat v1.2.58 from source.
+    This version is compatible with SDL 2.0.10 (Ubuntu 20.04 default),
+    unlike newer versions which require SDL_HINT_VIDEODRIVER (SDL 2.0.22+).
     """
     src_dir = "/tmp/sdl12-compat-src"
     build_dir = "/tmp/sdl12-compat-build"
@@ -59,9 +58,9 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
     if os.path.exists(build_dir):
         shutil.rmtree(build_dir)
 
-    print("[INFO] Cloning libsdl12-compat (patched version)...")
+    print("[INFO] Cloning libsdl12-compat v1.2.58 (patched version)...")
     subprocess.run(
-        ["git", "clone", "--depth=1",
+        ["git", "clone", "--depth=1", "--branch", "release-1.2.58",
          "https://github.com/libsdl-org/sdl12-compat.git", src_dir],
         check=True
     )
@@ -73,7 +72,7 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
         ["cmake", src_dir,
          "-DCMAKE_BUILD_TYPE=Release",
          "-DCMAKE_INSTALL_PREFIX=" + install_prefix,
-         "-DSDL12DEVEL=ON",  # Install development headers
+         "-DSDL12DEVEL=ON",
          "-DSDL12TESTS=OFF"],
         cwd=build_dir, check=True
     )
@@ -91,15 +90,14 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
     )
     subprocess.run(["ldconfig"], check=False)
 
-    # Verify the headers were installed
-    for h in ["SDL_keysym.h", "SDL_keysym.h", "SDL.h"]:
+    for h in ["SDL_keysym.h", "SDL.h"]:
         path = os.path.join(install_prefix, "include", "SDL", h)
         if os.path.exists(path):
             print(f"[INFO] Header installed: {path}")
         else:
             print(f"[WARN] Header not found: {path}")
 
-    print("[PATCHED] libsdl12-compat built and installed.")
+    print("[PATCHED] libsdl12-compat v1.2.58 built and installed.")
 
 
 # ===========================================================================
@@ -107,20 +105,12 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
 # ===========================================================================
 
 def patch_makefile(filepath="Makefile"):
-    """
-    Patch Makefile safely:
-      - ARCH, BUILD_GAME_SO, BUILD_GAME_QVM
-      - WIDTH single-line replacement
-      - ARCH_STRING via CFLAGS
-      - SDL_CFLAGS / SDL_LIBS explicitly pointing to sdl12-compat
-    """
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
         return False
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
 
-    # --- Force ARCH values ---
     content = re.sub(r'^ARCH\s*\?=\s*.*$',
                      'ARCH ?= aarch64', content, flags=re.MULTILINE)
     content = re.sub(r'^BUILD_GAME_SO\s*\?=\s*.*$',
@@ -128,14 +118,12 @@ def patch_makefile(filepath="Makefile"):
     content = re.sub(r'^BUILD_GAME_QVM\s*\?=\s*.*$',
                      'BUILD_GAME_QVM ?= 0', content, flags=re.MULTILINE)
 
-    # --- Safe WIDTH patch ---
     content = re.sub(
         r'WIDTH\s*:=\s*\$\(shell\s+tput\s+cols[^\)]*\)',
         'WIDTH := $(shell tput cols 2>/dev/null || echo 80)',
         content
     )
 
-    # --- Pass ARCH_STRING to the compiler via CFLAGS ---
     if '-DARCH_STRING=' not in content:
         content = re.sub(
             r'^(CFLAGS\s*\+=)',
@@ -143,9 +131,6 @@ def patch_makefile(filepath="Makefile"):
             content, count=1, flags=re.MULTILINE
         )
 
-    # --- SDL_CFLAGS / SDL_LIBS from sdl12-compat ---
-    # We use the sdl12-compat development headers, which provide the
-    # SDL 1.2 API on top of SDL2. This is what SmokinGuns expects.
     sdl_fix = (
         "\n"
         "# ---- SDL12-compat flags override (added by patch_arm64.py) ----\n"
@@ -171,15 +156,10 @@ def patch_makefile(filepath="Makefile"):
 
 
 # ===========================================================================
-# q_platform.h patch (top-level fallback)
+# q_platform.h patch
 # ===========================================================================
 
 def patch_q_platform(filepath="code/qcommon/q_platform.h"):
-    """
-    Add AArch64 fallback defines to q_platform.h.
-    Inserted right after the include guard so it applies to both
-    architecture chains (ARCH_STRING and CPUSTRING/endianness).
-    """
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return False
@@ -270,7 +250,7 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
 
 
 # ===========================================================================
-# SIMD loop injection (only bg_pmove.c)
+# SIMD loop injection
 # ===========================================================================
 
 def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
@@ -474,10 +454,8 @@ def main():
 
     fix_git_safe_directory()
 
-    # --- Build patched libsdl12-compat from source ---
     build_libsdl12_compat()
 
-    # --- Source patches ---
     patch_makefile('Makefile')
     patch_q_platform('code/qcommon/q_platform.h')
     inject_neon_math('code/qcommon/q_math.c')
