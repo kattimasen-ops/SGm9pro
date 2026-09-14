@@ -8,7 +8,9 @@ mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 
 import os
 import re
+import sys
 import glob
+import traceback
 import subprocess
 import urllib.request
 import urllib.parse
@@ -50,7 +52,7 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
     if os.path.exists(build_dir):
         shutil.rmtree(build_dir)
 
-    print("[INFO] Cloning libsdl12-compat v1.2.56 (compatible with SDL 2.0.10)...")
+    print("[INFO] Cloning libsdl12-compat v1.2.56 (compatible with SDL 2.0.10)...", flush=True)
     subprocess.run(
         ["git", "clone", "--depth=1", "--branch", "release-1.2.56",
          "https://github.com/libsdl-org/sdl12-compat.git", src_dir],
@@ -58,7 +60,7 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
     )
     os.makedirs(build_dir, exist_ok=True)
 
-    print("[INFO] Configuring libsdl12-compat with CMake...")
+    print("[INFO] Configuring libsdl12-compat with CMake...", flush=True)
     subprocess.run(
         ["cmake", src_dir,
          "-DCMAKE_BUILD_TYPE=Release",
@@ -67,27 +69,27 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
          "-DSDL12TESTS=OFF"],
         cwd=build_dir, check=True
     )
-    print("[INFO] Building libsdl12-compat...")
+    print("[INFO] Building libsdl12-compat...", flush=True)
     subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=build_dir, check=True)
 
-    print("[INFO] Installing libsdl12-compat...")
+    print("[INFO] Installing libsdl12-compat...", flush=True)
     subprocess.run(["make", "install"], cwd=build_dir, check=True)
     subprocess.run(["ldconfig"], check=False)
 
     for h in ["SDL_keysym.h", "SDL.h"]:
         path = os.path.join(install_prefix, "include", "SDL", h)
         if os.path.exists(path):
-            print(f"[INFO] Header installed: {path}")
+            print(f"[INFO] Header installed: {path}", flush=True)
         else:
-            print(f"[WARN] Header not found: {path}")
-    print("[PATCHED] libsdl12-compat v1.2.56 built and installed.")
+            print(f"[WARN] Header not found: {path}", flush=True)
+    print("[PATCHED] libsdl12-compat v1.2.56 built and installed.", flush=True)
 
 # ===========================================================================
 # Makefile patch (includes FreeType, SDL12-compat, and implicit-function fix)
 # ===========================================================================
 def patch_makefile(filepath="Makefile"):
     if not os.path.exists(filepath):
-        print(f"Error: Makefile not found at {filepath}")
+        print(f"Error: Makefile not found at {filepath}", flush=True)
         return False
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
@@ -135,7 +137,7 @@ def patch_makefile(filepath="Makefile"):
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, "
-          "WIDTH, ARCH_STRING, SDL12-compat, FreeType, implicit-function flags")
+          "WIDTH, ARCH_STRING, SDL12-compat, FreeType, implicit-function flags", flush=True)
     return True
 
 # ===========================================================================
@@ -143,12 +145,12 @@ def patch_makefile(filepath="Makefile"):
 # ===========================================================================
 def patch_q_platform(filepath="code/qcommon/q_platform.h"):
     if not os.path.exists(filepath):
-        print(f"[SKIP] {filepath} not found")
+        print(f"[SKIP] {filepath} not found", flush=True)
         return False
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
     if '__aarch64__' in content:
-        print("[SKIP] q_platform.h already has AArch64 support.")
+        print("[SKIP] q_platform.h already has AArch64 support.", flush=True)
         return False
     aarch64_fallback = (
         "\n"
@@ -173,23 +175,16 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         content = content[:insert_pos] + aarch64_fallback + content[insert_pos:]
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
-        print("[PATCHED] AArch64 fallback block added to q_platform.h.")
+        print("[PATCHED] AArch64 fallback block added to q_platform.h.", flush=True)
         return True
-    print("[WARN] Could not find insertion point in q_platform.h")
+    print("[WARN] Could not find insertion point in q_platform.h", flush=True)
     return False
 
 # ===========================================================================
-# ui_syscalls.c creation (shared-library build)
+# ui_syscalls.c creation (shared-library build) — always overwrites
 # ===========================================================================
 def create_ui_syscalls(filepath="code/ui/ui_syscalls.c"):
-    """
-    SmokinGuns ships only ui_syscalls.asm (used for QVM builds).
-    The shared-library build (BUILD_GAME_SO=1) needs a real ui_syscalls.c
-    that defines dllEntry() and every trap_* function the UI calls.
-    Always (re)write it so a stale or partial file from a previous run
-    can never poison the build.
-    """
-    # Force-clean any prior file or (pathological) directory at this location.
+    # Force-clean anything previously at this path.
     if os.path.isdir(filepath):
         shutil.rmtree(filepath)
     elif os.path.exists(filepath):
@@ -505,82 +500,77 @@ void trap_LAN_SaveCachedServers( void ) {
 void trap_LAN_LoadCachedServers( void ) {
     syscall( UI_LAN_LOADCACHEDSERVERS );
 }
-
-void trap_LAN_GetServerListInfo( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFO, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListAddressString( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTADDRESSSTRING, source, n, buf, buflen );
-}
-
-int trap_LAN_GetServerListPing( int source, int n ) {
-    return syscall( UI_LAN_GETSERVERLISTPING, source, n );
-}
-
-int trap_LAN_GetServerListCount( int source ) {
-    return syscall( UI_LAN_GETSERVERLISTCOUNT, source );
-}
-
-void trap_LAN_GetServerListInfoPing( int source, int n, char *buf, int buflen, int *pingtime ) {
-    syscall( UI_LAN_GETSERVERLISTINFOPING, source, n, buf, buflen, pingtime );
-}
-
-void trap_LAN_GetServerListInfoName( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFONAME, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoMap( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOMAP, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoGame( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOGAME, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoPlayers( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOPLAYERS, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoMaxPlayers( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOMAXPLAYERS, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoPingTime( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOPINGTIME, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoAddress( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOADDRESS, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoVersion( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOVERSION, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoProtocol( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOPROTOCOL, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoGameType( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOGAMETYPE, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoGameName( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOGAMENAME, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoMapName( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOMAPNAME, source, n, buf, buflen );
-}
-
-void trap_LAN_GetServerListInfoPlayerCount( int source, int n, char *buf, int buflen ) {
-    syscall( UI_LAN_GETSERVERLISTINFOPLAYERCOUNT, source, n, buf, buflen );
-}
 '''
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Wrote full {filepath} ({len(content)} bytes) for shared-library build.")
+    print(f"[PATCHED] Wrote full {filepath} ({len(content)} bytes) for shared-library build.", flush=True)
 
-# =====================================
+# ===========================================================================
+# NEON math injection
+# ===========================================================================
+def inject_neon_math(filepath="code/qcommon/q_math.c"):
+    if not os.path.exists(filepath):
+        print(f"[SKIP] {filepath} not found", flush=True)
+        return
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+    if "arm_neon.h" in content:
+        print("[SKIP] NEON math already injected.", flush=True)
+        return
+    neon_code = (
+        "#if defined(__aarch64__)\n"
+        "#include <arm_neon.h>\n"
+        "float Q_rsqrt(float number) {\n"
+        "    float32x4_t v = vdupq_n_f32(number);\n"
+        "    float32x4_t vr = vrsqrteq_f32(v);\n"
+        "    vr = vmulq_f32(vr, vrsqrtsq_f32(vmulq_f32(v, vr), vr));\n"
+        "    return vgetq_lane_f32(vr, 0);\n"
+        "}\n"
+        "#else\n"
+    )
+    new_content, n = re.subn(
+        r'(float\s+Q_rsqrt\s*\(\s*float\s+number\s*\)\s*\{)',
+        neon_code + r'\1', content, count=1
+    )
+    if n == 0:
+        print("[WARN] Q_rsqrt signature not found - NEON injection skipped.", flush=True)
+        return
+    pattern = r'(float\s+Q_rsqrt\s*\(.*?return.*?\n\})'
+    match = re.search(pattern, new_content, flags=re.DOTALL)
+    if not match:
+        print("[WARN] Could not find end of Q_rsqrt - #endif missing.", flush=True)
+        return
+    end_pos = match.end()
+    new_content = new_content[:end_pos] + "\n#endif\n" + new_content[end_pos:]
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+    print("[PATCHED] NEON-accelerated Q_rsqrt injected into q_math.c.", flush=True)
+
+# ===========================================================================
+# SIMD loop injection
+# ===========================================================================
+def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
+    if not os.path.exists(filepath):
+        print(f"[SKIP] {filepath} not found", flush=True)
+        return
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+    if "#pragma omp simd" in content:
+        print(f"[SKIP] OpenMP SIMD already present in {filepath}", flush=True)
+        return
+    match = re.search(pattern, content)
+    if not match:
+        print(f"[INFO] Pattern not found in {filepath} ({description}) - skipping.", flush=True)
+        return
+    insert_pos = match.start()
+    pragma = f"#pragma omp simd aligned({alignment_var}: 16)\n\t"
+    content = content[:insert_pos] + pragma + content[insert_pos:]
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print(f"[PATCHED] SIMD pragma injected into {filepath} ({description}).", flush=True)
+
+def find_and_patch_simd_loops():
+    bg_pmove_candidates = glob.glob("code/**/bg_pmove.c", recursive=True)
+    if bg_pmove_candidates:
+        inject_simd_by_pattern(
