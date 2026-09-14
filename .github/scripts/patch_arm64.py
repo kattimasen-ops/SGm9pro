@@ -14,11 +14,9 @@ import urllib.parse
 import html.parser
 import shutil
 
-
 # ===========================================================================
 # Directory listing parser (only .pk3 files)
 # ===========================================================================
-
 class DirectoryParser(html.parser.HTMLParser):
     EXCLUDED_FILES = {"sg_pak0.pk3"}
 
@@ -39,17 +37,10 @@ class DirectoryParser(html.parser.HTMLParser):
                         if value not in self.EXCLUDED_FILES:
                             self.files.append(value)
 
-
 # ===========================================================================
 # libsdl12-compat v1.2.56 (compatible with SDL 2.0.10)
 # ===========================================================================
-
 def build_libsdl12_compat(install_prefix="/usr/local"):
-    """
-    Build libsdl12-compat v1.2.56 from source.
-    This version is compatible with SDL 2.0.10 (Ubuntu 20.04 default),
-    unlike newer versions which require SDL_HINT_VIDEODRIVER (SDL 2.0.22+).
-    """
     src_dir = "/tmp/sdl12-compat-src"
     build_dir = "/tmp/sdl12-compat-build"
 
@@ -64,7 +55,6 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
          "https://github.com/libsdl-org/sdl12-compat.git", src_dir],
         check=True
     )
-
     os.makedirs(build_dir, exist_ok=True)
 
     print("[INFO] Configuring libsdl12-compat with CMake...")
@@ -76,18 +66,11 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
          "-DSDL12TESTS=OFF"],
         cwd=build_dir, check=True
     )
-
     print("[INFO] Building libsdl12-compat...")
-    subprocess.run(
-        ["make", "-j", str(os.cpu_count() or 2)],
-        cwd=build_dir, check=True
-    )
+    subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=build_dir, check=True)
 
     print("[INFO] Installing libsdl12-compat...")
-    subprocess.run(
-        ["make", "install"],
-        cwd=build_dir, check=True
-    )
+    subprocess.run(["make", "install"], cwd=build_dir, check=True)
     subprocess.run(["ldconfig"], check=False)
 
     for h in ["SDL_keysym.h", "SDL.h"]:
@@ -96,14 +79,11 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
             print(f"[INFO] Header installed: {path}")
         else:
             print(f"[WARN] Header not found: {path}")
-
     print("[PATCHED] libsdl12-compat v1.2.56 built and installed.")
 
-
 # ===========================================================================
-# Makefile patch
+# Makefile patch (includes FreeType and SDL12-compat fixes)
 # ===========================================================================
-
 def patch_makefile(filepath="Makefile"):
     if not os.path.exists(filepath):
         print(f"Error: Makefile not found at {filepath}")
@@ -123,7 +103,6 @@ def patch_makefile(filepath="Makefile"):
         'WIDTH := $(shell tput cols 2>/dev/null || echo 80)',
         content
     )
-
     if '-DARCH_STRING=' not in content:
         content = re.sub(
             r'^(CFLAGS\s*\+=)',
@@ -131,45 +110,46 @@ def patch_makefile(filepath="Makefile"):
             content, count=1, flags=re.MULTILINE
         )
 
-    sdl_fix = (
+    # Append overrides for SDL and FreeType at the end of the Makefile.
+    # This ensures the compiler finds the correct headers.
+    overrides = (
         "\n"
-        "# ---- SDL12-compat flags override (added by patch_arm64.py) ----\n"
+        "# ---- Overrides added by patch_arm64.py ----\n"
         "SDL_CFLAGS = -I/usr/local/include/SDL -D_REENTRANT\n"
         "SDL_LIBS = -L/usr/local/lib -lSDL -lSDL2\n"
+        "FREETYPE_CFLAGS = -I/usr/include/freetype2\n"
         "ifneq ($(SDL_CFLAGS),)\n"
         "  CFLAGS += $(SDL_CFLAGS)\n"
         "endif\n"
         "ifneq ($(SDL_LIBS),)\n"
         "  CLIENT_LIBS += $(SDL_LIBS)\n"
         "endif\n"
-        "# ---- end SDL12-compat flags override ----\n"
+        "ifneq ($(FREETYPE_CFLAGS),)\n"
+        "  CFLAGS += $(FREETYPE_CFLAGS)\n"
+        "endif\n"
+        "# ---- End of overrides ----\n"
     )
-
-    if 'SDL12-compat flags override' not in content:
-        content = content.rstrip() + "\n" + sdl_fix + "\n"
+    if 'Overrides added by patch_arm64.py' not in content:
+        content = content.rstrip() + "\n" + overrides + "\n"
 
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, "
-          "WIDTH, ARCH_STRING, SDL12-compat flags")
+          "WIDTH, ARCH_STRING, SDL12-compat, FreeType flags")
     return True
-
 
 # ===========================================================================
 # q_platform.h patch
 # ===========================================================================
-
 def patch_q_platform(filepath="code/qcommon/q_platform.h"):
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return False
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-
     if '__aarch64__' in content:
         print("[SKIP] q_platform.h already has AArch64 support.")
         return False
-
     aarch64_fallback = (
         "\n"
         "/* ---- AArch64 (ARM64) fallback support ---- */\n"
@@ -187,7 +167,6 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         "#endif\n"
         "/* ---- end AArch64 fallback ---- */\n"
     )
-
     match = re.search(r'(#define\s+\w+\s*\n)', content)
     if match:
         insert_pos = match.end()
@@ -196,26 +175,21 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
             f.write(content)
         print("[PATCHED] AArch64 fallback block added to q_platform.h.")
         return True
-
     print("[WARN] Could not find insertion point in q_platform.h")
     return False
-
 
 # ===========================================================================
 # NEON math injection
 # ===========================================================================
-
 def inject_neon_math(filepath="code/qcommon/q_math.c"):
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-
     if "arm_neon.h" in content:
         print("[SKIP] NEON math already injected.")
         return
-
     neon_code = (
         "#if defined(__aarch64__)\n"
         "#include <arm_neon.h>\n"
@@ -227,7 +201,6 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
         "}\n"
         "#else\n"
     )
-
     new_content, n = re.subn(
         r'(float\s+Q_rsqrt\s*\(\s*float\s+number\s*\)\s*\{)',
         neon_code + r'\1', content, count=1
@@ -235,7 +208,6 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
     if n == 0:
         print("[WARN] Q_rsqrt signature not found - NEON injection skipped.")
         return
-
     pattern = r'(float\s+Q_rsqrt\s*\(.*?return.*?\n\})'
     match = re.search(pattern, new_content, flags=re.DOTALL)
     if not match:
@@ -243,40 +215,32 @@ def inject_neon_math(filepath="code/qcommon/q_math.c"):
         return
     end_pos = match.end()
     new_content = new_content[:end_pos] + "\n#endif\n" + new_content[end_pos:]
-
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(new_content)
     print("[PATCHED] NEON-accelerated Q_rsqrt injected into q_math.c.")
 
-
 # ===========================================================================
 # SIMD loop injection
 # ===========================================================================
-
 def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
     if not os.path.exists(filepath):
         print(f"[SKIP] {filepath} not found")
         return
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-
     if "#pragma omp simd" in content:
         print(f"[SKIP] OpenMP SIMD already present in {filepath}")
         return
-
     match = re.search(pattern, content)
     if not match:
         print(f"[INFO] Pattern not found in {filepath} ({description}) - skipping.")
         return
-
     insert_pos = match.start()
     pragma = f"#pragma omp simd aligned({alignment_var}: 16)\n\t"
     content = content[:insert_pos] + pragma + content[insert_pos:]
-
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print(f"[PATCHED] SIMD pragma injected into {filepath} ({description}).")
-
 
 def find_and_patch_simd_loops():
     bg_pmove_candidates = glob.glob("code/**/bg_pmove.c", recursive=True)
@@ -290,11 +254,9 @@ def find_and_patch_simd_loops():
     else:
         print("[WARN] bg_pmove.c not found anywhere under code/")
 
-
 # ===========================================================================
 # mimalloc
 # ===========================================================================
-
 def install_newer_cmake():
     print("[INFO] Upgrading CMake via pip (requires >= 3.18 for mimalloc)...")
     subprocess.run(["python3", "-m", "pip", "install", "--upgrade", "pip"], check=True)
@@ -309,7 +271,6 @@ def install_newer_cmake():
     if (major, minor) < (3, 18):
         raise RuntimeError(f"CMake version still too old: {version_line}. Need >= 3.18.")
 
-
 def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
     mimalloc_src = "/tmp/mimalloc-src"
     mimalloc_build = "/tmp/mimalloc-build"
@@ -317,7 +278,6 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
         shutil.rmtree(mimalloc_src)
     if os.path.exists(mimalloc_build):
         shutil.rmtree(mimalloc_build)
-
     print("[INFO] Cloning mimalloc from GitHub...")
     subprocess.run(
         ["git", "clone", "--depth=1",
@@ -325,13 +285,11 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
         check=True
     )
     os.makedirs(mimalloc_build, exist_ok=True)
-
     mimalloc_cflags = (
         "-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer "
         "-fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants "
         "-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon -fno-unroll-loops"
     )
-
     print("[INFO] Configuring mimalloc with CMake...")
     subprocess.run(
         ["cmake", mimalloc_src,
@@ -343,13 +301,10 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
          f"-DCMAKE_INSTALL_PREFIX={os.path.abspath(install_prefix)}"],
         cwd=mimalloc_build, check=True
     )
-
     print("[INFO] Building mimalloc...")
     subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=mimalloc_build, check=True)
-
     print("[INFO] Installing mimalloc to build output...")
     subprocess.run(["make", "install"], cwd=mimalloc_build, check=True)
-
     mod_dir = os.path.join(install_prefix, "smokinguns")
     os.makedirs(mod_dir, exist_ok=True)
     for lib in ["libmimalloc.so", "libmimalloc.so.3", "libmimalloc.so.3.5"]:
@@ -357,14 +312,11 @@ def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
         if os.path.exists(src_lib):
             shutil.copy2(src_lib, os.path.join(mod_dir, lib))
             print(f"[INFO] Copied {lib} to {mod_dir}")
-
     print("[PATCHED] mimalloc built and installed.")
-
 
 # ===========================================================================
 # Mirror download
 # ===========================================================================
-
 def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max_depth=10):
     if max_depth <= 0:
         return
@@ -404,11 +356,9 @@ def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max
     except Exception as e:
         print(f"[ERROR] Crawling {active_url}: {e}")
 
-
 # ===========================================================================
 # autoexec.cfg
 # ===========================================================================
-
 def write_autoexec(output_mod_dir):
     os.makedirs(output_mod_dir, exist_ok=True)
     autoexec_path = os.path.join(output_mod_dir, "autoexec.cfg")
@@ -431,77 +381,46 @@ def write_autoexec(output_mod_dir):
         f.write("\n".join(cvars) + "\n")
     print(f"[INFO] autoexec.cfg written to {autoexec_path}")
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
-
 def fix_git_safe_directory():
     subprocess.run(
         ["git", "config", "--global", "--add", "safe.directory", "/work"],
         check=False, capture_output=True
     )
 
-
 # ===========================================================================
 # Main
 # ===========================================================================
-
 def main():
     print("=" * 60)
     print(" Smokin' Guns ARM64 (RK3326 / Cortex-A35) Build Patcher")
     print("=" * 60)
-
     fix_git_safe_directory()
-
     build_libsdl12_compat()
-
     patch_makefile('Makefile')
     patch_q_platform('code/qcommon/q_platform.h')
     inject_neon_math('code/qcommon/q_math.c')
     find_and_patch_simd_loops()
-
     install_newer_cmake()
     build_and_install_mimalloc()
-
     cpu_count = os.cpu_count() or 2
     cc = os.environ.get("CC", "gcc")
-
     optimize_flags = (
-        "-O3 "
-        "-mcpu=cortex-a35 "
-        "-mtune=cortex-a35 "
-        "-pipe "
-        "-fomit-frame-pointer "
-        "-ffast-math "
-        "-ftree-vectorize "
-        "-fno-math-errno "
-        "-fno-trapping-math "
-        "-fno-semantic-interposition "
-        "-fno-stack-protector "
-        "-fno-asynchronous-unwind-tables "
-        "-fmerge-all-constants "
-        "-falign-functions=16 "
-        "-falign-loops=16 "
-        "-DNDEBUG "
-        "-w "
-        "-fcommon "
-        "-fopenmp-simd "
-        "-flax-vector-conversions "
-        "-mno-outline-atomics "
+        "-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer "
+        "-ffast-math -ftree-vectorize -fno-math-errno -fno-trapping-math "
+        "-fno-semantic-interposition -fno-stack-protector "
+        "-fno-asynchronous-unwind-tables -fmerge-all-constants "
+        "-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon "
+        "-fopenmp-simd -flax-vector-conversions -mno-outline-atomics "
         "-fno-unroll-loops"
     )
-
     compile_cmd = (
-        f"make -j{cpu_count} "
-        f"ARCH=aarch64 "
-        f"BUILD_GAME_SO=1 "
-        f"BUILD_GAME_QVM=0 "
-        f'CC="{cc}" '
-        f'OPTIMIZE="{optimize_flags}" '
+        f"make -j{cpu_count} ARCH=aarch64 BUILD_GAME_SO=1 BUILD_GAME_QVM=0 "
+        f'CC="{cc}" OPTIMIZE="{optimize_flags}" '
         f'LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,--strip-all"'
     )
-
     print(f"\n[INFO] Compiling with CC={cc}, {cpu_count} parallel jobs")
     print(f"[INFO] OPTIMIZE flags: {optimize_flags}\n")
     subprocess.run(compile_cmd, shell=True, check=True)
@@ -512,16 +431,13 @@ def main():
     print(f"[INFO] Target directory: {output_mod_dir}")
     print(f"[INFO] Excluded: sg_pak0.pk3 (370 MB base package)\n")
     crawl_and_download_mirror(mirror_root, output_mod_dir)
-
     write_autoexec(output_mod_dir)
-
     print("\n" + "=" * 60)
     print(" Build complete!")
     print("=" * 60)
     print(f"\n Artifact contents: {os.path.abspath('build/release-linux-aarch64')}")
     print(" Copy the entire folder to your device's port directory.")
     print("=" * 60)
-
 
 if __name__ == '__main__':
     main()
