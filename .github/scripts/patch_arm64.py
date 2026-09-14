@@ -38,6 +38,56 @@ def patch_makefile():
     open("Makefile","w").write(c)
     print("[OK] Makefile patched", flush=True)
 
+def patch_makefile_smokinguns():
+    """Add ui_syscalls.o to the UI object list and ensure a rule exists."""
+    path = "Makefile.smokinguns"
+    if not os.path.exists(path):
+        print(f"[SKIP] {path} not found", flush=True)
+        return
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        c = f.read()
+
+    # 1. Add ui_syscalls.o to SDK_Q3UIOBJ if not already present
+    if "ui_syscalls.o" not in c:
+        # Try inserting after ui_shared.o line
+        new_c = c.replace(
+            "$(B)/$(SDK_GAMENAME)/ui/ui_shared.o \\",
+            "$(B)/$(SDK_GAMENAME)/ui/ui_shared.o \\\n"
+            "$(B)/$(SDK_GAMENAME)/ui/ui_syscalls.o \\"
+        )
+        if new_c == c:
+            # Fallback: insert after ui_main.o
+            new_c = c.replace(
+                "$(B)/$(SDK_GAMENAME)/ui/ui_main.o \\",
+                "$(B)/$(SDK_GAMENAME)/ui/ui_main.o \\\n"
+                "$(B)/$(SDK_GAMENAME)/ui/ui_syscalls.o \\"
+            )
+        if new_c == c:
+            print("[WARN] Could not find insertion point for ui_syscalls.o",
+                  flush=True)
+        else:
+            c = new_c
+            print("[PATCHED] Makefile.smokinguns: added ui_syscalls.o to SDK_Q3UIOBJ",
+                  flush=True)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(c)
+
+    # 2. Add a fallback pattern rule to the main Makefile for the non-SDK path
+    mpath = "Makefile"
+    with open(mpath, "r", encoding="utf-8", errors="ignore") as f:
+        m = f.read()
+    if "$(B)/ui/%.o: code/ui/%.c" not in m:
+        m = m.rstrip() + (
+            "\n\n# Fallback rule for ui_syscalls.o (non-SDK path)\n"
+            "$(B)/ui/%.o: code/ui/%.c\n"
+            "\t$(DO_UI_CC)\n"
+        )
+        with open(mpath, "w", encoding="utf-8") as f:
+            f.write(m)
+        print("[PATCHED] Makefile: added fallback rule for $(B)/ui/%.o",
+              flush=True)
+
 def patch_qplat():
     p = "code/qcommon/q_platform.h"
     c = open(p).read()
@@ -206,6 +256,7 @@ def main():
                    check=False, capture_output=True)
     sdl12()
     patch_makefile()
+    patch_makefile_smokinguns()
     patch_qplat()
     mk_ui_syscalls()
     neon()
