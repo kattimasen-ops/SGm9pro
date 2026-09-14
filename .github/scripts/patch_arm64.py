@@ -114,6 +114,8 @@ def patch_makefile(filepath="Makefile"):
     # Append overrides for SDL, FreeType, and implicit-function declarations.
     # The last matching GCC flag wins, so -Wno-error=implicit-function-declaration
     # overrides the earlier -Werror-implicit-function-declaration from the Makefile.
+    # It MUST be added to BASE_CFLAGS (not CFLAGS) so that it appears after the
+    # original error flag in the final compile command.
     overrides = (
         "\n"
         "# ---- Overrides added by patch_arm64.py ----\n"
@@ -129,7 +131,7 @@ def patch_makefile(filepath="Makefile"):
         "ifneq ($(FREETYPE_CFLAGS),)\n"
         "  CFLAGS += $(FREETYPE_CFLAGS)\n"
         "endif\n"
-        "CFLAGS += -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration\n"
+        "BASE_CFLAGS += -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration\n"
         "# ---- End of overrides ----\n"
     )
     if 'Overrides added by patch_arm64.py' not in content:
