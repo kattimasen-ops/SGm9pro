@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smokin' Guns ARM64 (RK3326 / Cortex-A35) build patcher.
-Fixes ARCH_STRING, SDL12-compat (v1.2.58), injects NEON math, OpenMP SIMD,
+Fixes ARCH_STRING, SDL12-compat (v1.2.56), injects NEON math, OpenMP SIMD,
 builds mimalloc, mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 """
 
@@ -41,12 +41,12 @@ class DirectoryParser(html.parser.HTMLParser):
 
 
 # ===========================================================================
-# libsdl12-compat v1.2.58 (compatible with SDL 2.0.10)
+# libsdl12-compat v1.2.56 (compatible with SDL 2.0.10)
 # ===========================================================================
 
 def build_libsdl12_compat(install_prefix="/usr/local"):
     """
-    Build libsdl12-compat v1.2.58 from source.
+    Build libsdl12-compat v1.2.56 from source.
     This version is compatible with SDL 2.0.10 (Ubuntu 20.04 default),
     unlike newer versions which require SDL_HINT_VIDEODRIVER (SDL 2.0.22+).
     """
@@ -58,9 +58,9 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
     if os.path.exists(build_dir):
         shutil.rmtree(build_dir)
 
-    print("[INFO] Cloning libsdl12-compat v1.2.58 (patched version)...")
+    print("[INFO] Cloning libsdl12-compat v1.2.56 (compatible with SDL 2.0.10)...")
     subprocess.run(
-        ["git", "clone", "--depth=1", "--branch", "release-1.2.58",
+        ["git", "clone", "--depth=1", "--branch", "release-1.2.56",
          "https://github.com/libsdl-org/sdl12-compat.git", src_dir],
         check=True
     )
@@ -97,7 +97,7 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
         else:
             print(f"[WARN] Header not found: {path}")
 
-    print("[PATCHED] libsdl12-compat v1.2.58 built and installed.")
+    print("[PATCHED] libsdl12-compat v1.2.56 built and installed.")
 
 
 # ===========================================================================
