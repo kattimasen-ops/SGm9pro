@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Smokin' Guns ARM64 (RK3326 / Cortex-A35) build patcher.
-Fixes ARCH_STRING, SDL12-compat (v1.2.56), injects NEON math, OpenMP SIMD,
-builds mimalloc, mirrors .pk3 game assets, and writes a performance autoexec.cfg.
+Fixes ARCH_STRING, SDL12-compat (v1.2.56), FreeType, implicit function
+declarations, injects NEON math, OpenMP SIMD, builds mimalloc,
+mirrors .pk3 game assets, and writes a performance autoexec.cfg.
 """
 
 import os
@@ -82,7 +83,7 @@ def build_libsdl12_compat(install_prefix="/usr/local"):
     print("[PATCHED] libsdl12-compat v1.2.56 built and installed.")
 
 # ===========================================================================
-# Makefile patch (includes FreeType and SDL12-compat fixes)
+# Makefile patch (includes FreeType, SDL12-compat, and implicit-function fix)
 # ===========================================================================
 def patch_makefile(filepath="Makefile"):
     if not os.path.exists(filepath):
@@ -110,8 +111,9 @@ def patch_makefile(filepath="Makefile"):
             content, count=1, flags=re.MULTILINE
         )
 
-    # Append overrides for SDL and FreeType at the end of the Makefile.
-    # This ensures the compiler finds the correct headers.
+    # Append overrides for SDL, FreeType, and implicit-function declarations.
+    # The last matching GCC flag wins, so -Wno-error=implicit-function-declaration
+    # overrides the earlier -Werror-implicit-function-declaration from the Makefile.
     overrides = (
         "\n"
         "# ---- Overrides added by patch_arm64.py ----\n"
@@ -127,6 +129,7 @@ def patch_makefile(filepath="Makefile"):
         "ifneq ($(FREETYPE_CFLAGS),)\n"
         "  CFLAGS += $(FREETYPE_CFLAGS)\n"
         "endif\n"
+        "CFLAGS += -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration\n"
         "# ---- End of overrides ----\n"
     )
     if 'Overrides added by patch_arm64.py' not in content:
@@ -135,7 +138,7 @@ def patch_makefile(filepath="Makefile"):
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
     print("[PATCHED] Makefile: ARCH, BUILD_GAME_SO, BUILD_GAME_QVM, "
-          "WIDTH, ARCH_STRING, SDL12-compat, FreeType flags")
+          "WIDTH, ARCH_STRING, SDL12-compat, FreeType, implicit-function flags")
     return True
 
 # ===========================================================================
