@@ -183,287 +183,404 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
 # ===========================================================================
 def create_ui_syscalls(filepath="code/ui/ui_syscalls.c"):
     """
-    The SmokinGuns source tree only contains ui_syscalls.asm (for QVM builds).
-    The shared-library build (BUILD_GAME_SO=1) requires ui_syscalls.c to
-    declare the syscall function pointer.  Create it if missing.
+    SmokinGuns ships only ui_syscalls.asm (used for QVM builds).
+    The shared-library build (BUILD_GAME_SO=1) needs a real ui_syscalls.c
+    that defines dllEntry() and every trap_* function the UI calls.
+    Always (re)write it so a stale or partial file from a previous run
+    can never poison the build.
     """
-    if os.path.exists(filepath):
-        print(f"[SKIP] {filepath} already exists.")
-        return
+    # Force-clean any prior file or (pathological) directory at this location.
+    if os.path.isdir(filepath):
+        shutil.rmtree(filepath)
+    elif os.path.exists(filepath):
+        os.remove(filepath)
+
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    content = (
-        '#include "ui_local.h"\n'
-        "\n"
-        "// This file is only used for the shared-library build.\n"
-        "// The engine sets this pointer when the UI library is loaded.\n"
-        "intptr_t (QDECL *syscall)( intptr_t arg, ... ) =\n"
-        "    (intptr_t (QDECL *)( intptr_t, ...)) - 1;\n"
-    )
+
+    content = r'''/*
+===========================================================================
+Copyright (C) 1999-2005 Id Software, Inc.
+Copyright (C) 2000-2010 Smokin' Guns
+
+This file is part of Smokin' Guns.
+
+Smokin' Guns is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+Smokin' Guns is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Smokin' Guns; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+
+#include "ui_local.h"
+
+// this file is only included when building a dll
+// syscalls.asm is included instead when building a qvm
+#ifdef Q3_VM
+#error "Do not use in VM build"
+#endif
+
+static intptr_t (QDECL *syscall)( intptr_t arg, ... ) = (intptr_t (QDECL *)( intptr_t, ...)) - 1;
+
+void QDECL dllEntry( intptr_t (QDECL *syscallptr)( intptr_t arg, ... ) ) {
+    syscall = syscallptr;
+}
+
+int PASSFLOAT( float x ) {
+    floatint_t fi;
+    fi.f = x;
+    return fi.i;
+}
+
+void trap_Print( const char *string ) {
+    syscall( UI_PRINT, string );
+}
+
+void trap_Error( const char *string ) {
+    syscall( UI_ERROR, string );
+}
+
+int trap_Milliseconds( void ) {
+    return syscall( UI_MILLISECONDS );
+}
+
+void trap_Cvar_Register( vmCvar_t *cvar, const char *var_name, const char *value, int flags ) {
+    syscall( UI_CVAR_REGISTER, cvar, var_name, value, flags );
+}
+
+void trap_Cvar_Update( vmCvar_t *cvar ) {
+    syscall( UI_CVAR_UPDATE, cvar );
+}
+
+void trap_Cvar_Set( const char *var_name, const char *value ) {
+    syscall( UI_CVAR_SET, var_name, value );
+}
+
+float trap_Cvar_VariableValue( const char *var_name ) {
+    intptr_t temp;
+    temp = syscall( UI_CVAR_VARIABLEVALUE, var_name );
+    return (*(float*)&temp);
+}
+
+void trap_Cvar_VariableStringBuffer( const char *var_name, char *buffer, int bufsize ) {
+    syscall( UI_CVAR_VARIABLESTRINGBUFFER, var_name, buffer, bufsize );
+}
+
+void trap_Cvar_SetValue( const char *var_name, float value ) {
+    syscall( UI_CVAR_SETVALUE, var_name, PASSFLOAT( value ) );
+}
+
+void trap_Cvar_Reset( const char *name ) {
+    syscall( UI_CVAR_RESET, name );
+}
+
+void trap_Cvar_Create( const char *var_name, const char *var_value, int flags ) {
+    syscall( UI_CVAR_CREATE, var_name, var_value, flags );
+}
+
+void trap_Cvar_InfoStringBuffer( int bit, char *buffer, int bufsize ) {
+    syscall( UI_CVAR_INFOSTRINGBUFFER, bit, buffer, bufsize );
+}
+
+int trap_Argc( void ) {
+    return syscall( UI_ARGC );
+}
+
+void trap_Argv( int n, char *buffer, int bufferLength ) {
+    syscall( UI_ARGV, n, buffer, bufferLength );
+}
+
+void trap_Cmd_ExecuteText( int exec_when, const char *text ) {
+    syscall( UI_CMD_EXECUTETEXT, exec_when, text );
+}
+
+void trap_FS_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
+    syscall( UI_FS_FOPENFILE, qpath, f, mode );
+}
+
+void trap_FS_Read( void *buffer, int len, fileHandle_t f ) {
+    syscall( UI_FS_READ, buffer, len, f );
+}
+
+void trap_FS_Write( const void *buffer, int len, fileHandle_t f ) {
+    syscall( UI_FS_WRITE, buffer, len, f );
+}
+
+void trap_FS_FCloseFile( fileHandle_t f ) {
+    syscall( UI_FS_FCLOSEFILE, f );
+}
+
+int trap_FS_GetFileList( const char *path, const char *extension, char *listbuf, int bufsize ) {
+    return syscall( UI_FS_GETFILELIST, path, extension, listbuf, bufsize );
+}
+
+int trap_FS_Seek( fileHandle_t f, long offset, int origin ) {
+    return syscall( UI_FS_SEEK, f, offset, origin );
+}
+
+qhandle_t trap_R_RegisterModel( const char *name ) {
+    return syscall( UI_R_REGISTERMODEL, name );
+}
+
+qhandle_t trap_R_RegisterSkin( const char *name ) {
+    return syscall( UI_R_REGISTERSKIN, name );
+}
+
+qhandle_t trap_R_RegisterShaderNoMip( const char *name ) {
+    return syscall( UI_R_REGISTERSHADERNOMIP, name );
+}
+
+void trap_R_ClearScene( void ) {
+    syscall( UI_R_CLEARSCENE );
+}
+
+void trap_R_AddRefEntityToScene( const refEntity_t *re ) {
+    syscall( UI_R_ADDREFENTITYTOSCENE, re );
+}
+
+void trap_R_AddPolyToScene( qhandle_t hShader, int numVerts, const polyVert_t *verts ) {
+    syscall( UI_R_ADDPOLYTOSCENE, hShader, numVerts, verts );
+}
+
+void trap_R_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b ) {
+    syscall( UI_R_ADDLIGHTTOSCENE, org, PASSFLOAT(intensity), PASSFLOAT(r), PASSFLOAT(g), PASSFLOAT(b) );
+}
+
+void trap_R_RenderScene( const refdef_t *fd ) {
+    syscall( UI_R_RENDERSCENE, fd );
+}
+
+void trap_R_SetColor( const float *rgba ) {
+    syscall( UI_R_SETCOLOR, rgba );
+}
+
+void trap_R_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t hShader ) {
+    syscall( UI_R_DRAWSTRETCHPIC, PASSFLOAT(x), PASSFLOAT(y), PASSFLOAT(w), PASSFLOAT(h), PASSFLOAT(s1), PASSFLOAT(t1), PASSFLOAT(s2), PASSFLOAT(t2), hShader );
+}
+
+void trap_UpdateScreen( void ) {
+    syscall( UI_UPDATESCREEN );
+}
+
+int trap_CM_LerpTag( orientation_t *tag, clipHandle_t mod, int startFrame, int endFrame, float frac, const char *tagName ) {
+    return syscall( UI_CM_LERPTAG, tag, mod, startFrame, endFrame, PASSFLOAT(frac), tagName );
+}
+
+void trap_S_StartLocalSound( sfxHandle_t sfx, int channelNum ) {
+    syscall( UI_S_STARTLOCALSOUND, sfx, channelNum );
+}
+
+void trap_S_RegisterSound( const char *sample, qboolean compressed ) {
+    syscall( UI_S_REGISTERSOUND, sample, compressed );
+}
+
+void trap_Key_KeynumToStringBuf( int keynum, char *buf, int buflen ) {
+    syscall( UI_KEY_KEYNUMTOSTRINGBUF, keynum, buf, buflen );
+}
+
+void trap_Key_GetBindingBuf( int keynum, char *buf, int buflen ) {
+    syscall( UI_KEY_GETBINDINGBUF, keynum, buf, buflen );
+}
+
+void trap_Key_SetBinding( int keynum, const char *binding ) {
+    syscall( UI_KEY_SETBINDING, keynum, binding );
+}
+
+qboolean trap_Key_IsDown( int keynum ) {
+    return syscall( UI_KEY_ISDOWN, keynum );
+}
+
+qboolean trap_Key_GetOverstrikeMode( void ) {
+    return syscall( UI_KEY_GETOVERSTRIKEMODE );
+}
+
+void trap_Key_SetOverstrikeMode( qboolean state ) {
+    syscall( UI_KEY_SETOVERSTRIKEMODE, state );
+}
+
+void trap_Key_ClearStates( void ) {
+    syscall( UI_KEY_CLEARSTATES );
+}
+
+int trap_Key_GetCatcher( void ) {
+    return syscall( UI_KEY_GETCATCHER );
+}
+
+void trap_Key_SetCatcher( int catcher ) {
+    syscall( UI_KEY_SETCATCHER, catcher );
+}
+
+void trap_GetClipboardData( char *buf, int bufsize ) {
+    syscall( UI_GETCLIPBOARDDATA, buf, bufsize );
+}
+
+void trap_GetClientState( uiClientState_t *cs ) {
+    syscall( UI_GETCLIENTSTATE, cs );
+}
+
+void trap_GetGlconfig( glconfig_t *glconfig ) {
+    syscall( UI_GETGLCONFIG, glconfig );
+}
+
+int trap_GetConfigString( int index, char *buffer, int bufferSize ) {
+    return syscall( UI_GETCONFIGSTRING, index, buffer, bufferSize );
+}
+
+int trap_LAN_GetServerCount( int source ) {
+    return syscall( UI_LAN_GETSERVERCOUNT, source );
+}
+
+void trap_LAN_GetServerAddressString( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERADDRESSSTRING, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerInfo( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERINFO, source, n, buf, buflen );
+}
+
+int trap_LAN_GetServerPing( int source, int n ) {
+    return syscall( UI_LAN_GETSERVERPING, source, n );
+}
+
+int trap_LAN_GetPingQueueCount( void ) {
+    return syscall( UI_LAN_GETPINGQUEUECOUNT );
+}
+
+void trap_LAN_ClearPing( int n ) {
+    syscall( UI_LAN_CLEARPING, n );
+}
+
+void trap_LAN_GetPing( int n, char *buf, int buflen, int *pingtime ) {
+    syscall( UI_LAN_GETPING, n, buf, buflen, pingtime );
+}
+
+void trap_LAN_GetPingInfo( int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETPINGINFO, n, buf, buflen );
+}
+
+void trap_LAN_MarkServerVisible( int source, int n, qboolean visible ) {
+    syscall( UI_LAN_MARKSERVERVISIBLE, source, n, visible );
+}
+
+int trap_LAN_ServerIsVisible( int source, int n ) {
+    return syscall( UI_LAN_SERVERISVISIBLE, source, n );
+}
+
+qboolean trap_LAN_UpdateVisiblePings( int source ) {
+    return syscall( UI_LAN_UPDATEVISIBLEPINGS, source );
+}
+
+int trap_LAN_AddServer( int source, const char *name, const char *addr ) {
+    return syscall( UI_LAN_ADDSERVER, source, name, addr );
+}
+
+void trap_LAN_RemoveServer( int source, const char *addr ) {
+    syscall( UI_LAN_REMOVESERVER, source, addr );
+}
+
+void trap_LAN_ResetPings( int n ) {
+    syscall( UI_LAN_RESETPINGS, n );
+}
+
+int trap_LAN_ServerStatus( const char *serverAddress, char *serverStatus, int maxLen ) {
+    return syscall( UI_LAN_SERVERSTATUS, serverAddress, serverStatus, maxLen );
+}
+
+int trap_LAN_CompareServers( int source, int sortKey, int sortDir, int s1, int s2 ) {
+    return syscall( UI_LAN_COMPARESERVERS, source, sortKey, sortDir, s1, s2 );
+}
+
+void trap_LAN_SaveCachedServers( void ) {
+    syscall( UI_LAN_SAVECACHEDSERVERS );
+}
+
+void trap_LAN_LoadCachedServers( void ) {
+    syscall( UI_LAN_LOADCACHEDSERVERS );
+}
+
+void trap_LAN_GetServerListInfo( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFO, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListAddressString( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTADDRESSSTRING, source, n, buf, buflen );
+}
+
+int trap_LAN_GetServerListPing( int source, int n ) {
+    return syscall( UI_LAN_GETSERVERLISTPING, source, n );
+}
+
+int trap_LAN_GetServerListCount( int source ) {
+    return syscall( UI_LAN_GETSERVERLISTCOUNT, source );
+}
+
+void trap_LAN_GetServerListInfoPing( int source, int n, char *buf, int buflen, int *pingtime ) {
+    syscall( UI_LAN_GETSERVERLISTINFOPING, source, n, buf, buflen, pingtime );
+}
+
+void trap_LAN_GetServerListInfoName( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFONAME, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoMap( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOMAP, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoGame( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOGAME, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoPlayers( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOPLAYERS, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoMaxPlayers( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOMAXPLAYERS, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoPingTime( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOPINGTIME, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoAddress( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOADDRESS, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoVersion( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOVERSION, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoProtocol( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOPROTOCOL, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoGameType( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOGAMETYPE, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoGameName( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOGAMENAME, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoMapName( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOMAPNAME, source, n, buf, buflen );
+}
+
+void trap_LAN_GetServerListInfoPlayerCount( int source, int n, char *buf, int buflen ) {
+    syscall( UI_LAN_GETSERVERLISTINFOPLAYERCOUNT, source, n, buf, buflen );
+}
+'''
+
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Created {filepath} for shared-library build.")
+    print(f"[PATCHED] Wrote full {filepath} ({len(content)} bytes) for shared-library build.")
 
-# ===========================================================================
-# NEON math injection
-# ===========================================================================
-def inject_neon_math(filepath="code/qcommon/q_math.c"):
-    if not os.path.exists(filepath):
-        print(f"[SKIP] {filepath} not found")
-        return
-    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-        content = f.read()
-    if "arm_neon.h" in content:
-        print("[SKIP] NEON math already injected.")
-        return
-    neon_code = (
-        "#if defined(__aarch64__)\n"
-        "#include <arm_neon.h>\n"
-        "float Q_rsqrt(float number) {\n"
-        "    float32x4_t v = vdupq_n_f32(number);\n"
-        "    float32x4_t vr = vrsqrteq_f32(v);\n"
-        "    vr = vmulq_f32(vr, vrsqrtsq_f32(vmulq_f32(v, vr), vr));\n"
-        "    return vgetq_lane_f32(vr, 0);\n"
-        "}\n"
-        "#else\n"
-    )
-    new_content, n = re.subn(
-        r'(float\s+Q_rsqrt\s*\(\s*float\s+number\s*\)\s*\{)',
-        neon_code + r'\1', content, count=1
-    )
-    if n == 0:
-        print("[WARN] Q_rsqrt signature not found - NEON injection skipped.")
-        return
-    pattern = r'(float\s+Q_rsqrt\s*\(.*?return.*?\n\})'
-    match = re.search(pattern, new_content, flags=re.DOTALL)
-    if not match:
-        print("[WARN] Could not find end of Q_rsqrt - #endif missing.")
-        return
-    end_pos = match.end()
-    new_content = new_content[:end_pos] + "\n#endif\n" + new_content[end_pos:]
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(new_content)
-    print("[PATCHED] NEON-accelerated Q_rsqrt injected into q_math.c.")
-
-# ===========================================================================
-# SIMD loop injection
-# ===========================================================================
-def inject_simd_by_pattern(filepath, pattern, alignment_var, description):
-    if not os.path.exists(filepath):
-        print(f"[SKIP] {filepath} not found")
-        return
-    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-        content = f.read()
-    if "#pragma omp simd" in content:
-        print(f"[SKIP] OpenMP SIMD already present in {filepath}")
-        return
-    match = re.search(pattern, content)
-    if not match:
-        print(f"[INFO] Pattern not found in {filepath} ({description}) - skipping.")
-        return
-    insert_pos = match.start()
-    pragma = f"#pragma omp simd aligned({alignment_var}: 16)\n\t"
-    content = content[:insert_pos] + pragma + content[insert_pos:]
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print(f"[PATCHED] SIMD pragma injected into {filepath} ({description}).")
-
-def find_and_patch_simd_loops():
-    bg_pmove_candidates = glob.glob("code/**/bg_pmove.c", recursive=True)
-    if bg_pmove_candidates:
-        inject_simd_by_pattern(
-            bg_pmove_candidates[0],
-            pattern=r'(for\s*\(\s*i\s*=\s*0\s*;\s*i\s*<\s*pm->numtouch\s*;)',
-            alignment_var='pm->touchents',
-            description="bg_pmove.c touch loop"
-        )
-    else:
-        print("[WARN] bg_pmove.c not found anywhere under code/")
-
-# ===========================================================================
-# mimalloc
-# ===========================================================================
-def install_newer_cmake():
-    print("[INFO] Upgrading CMake via pip (requires >= 3.18 for mimalloc)...")
-    subprocess.run(["python3", "-m", "pip", "install", "--upgrade", "pip"], check=True)
-    subprocess.run(["python3", "-m", "pip", "install", "cmake>=3.18"], check=True)
-    result = subprocess.run(["cmake", "--version"], capture_output=True, text=True, check=True)
-    version_line = result.stdout.strip().splitlines()[0]
-    print(f"[INFO] CMake version now: {version_line}")
-    match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_line)
-    if not match:
-        raise RuntimeError(f"Could not parse CMake version from: {version_line}")
-    major, minor = int(match.group(1)), int(match.group(2))
-    if (major, minor) < (3, 18):
-        raise RuntimeError(f"CMake version still too old: {version_line}. Need >= 3.18.")
-
-def build_and_install_mimalloc(install_prefix="build/release-linux-aarch64"):
-    mimalloc_src = "/tmp/mimalloc-src"
-    mimalloc_build = "/tmp/mimalloc-build"
-    if os.path.exists(mimalloc_src):
-        shutil.rmtree(mimalloc_src)
-    if os.path.exists(mimalloc_build):
-        shutil.rmtree(mimalloc_build)
-    print("[INFO] Cloning mimalloc from GitHub...")
-    subprocess.run(
-        ["git", "clone", "--depth=1",
-         "https://github.com/microsoft/mimalloc.git", mimalloc_src],
-        check=True
-    )
-    os.makedirs(mimalloc_build, exist_ok=True)
-    mimalloc_cflags = (
-        "-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer "
-        "-fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants "
-        "-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon -fno-unroll-loops"
-    )
-    print("[INFO] Configuring mimalloc with CMake...")
-    subprocess.run(
-        ["cmake", mimalloc_src,
-         "-DCMAKE_BUILD_TYPE=Release",
-         "-DMI_BUILD_SHARED=ON",
-         "-DMI_BUILD_STATIC=OFF",
-         "-DMI_BUILD_OBJECT=OFF",
-         f"-DCMAKE_C_FLAGS={mimalloc_cflags}",
-         f"-DCMAKE_INSTALL_PREFIX={os.path.abspath(install_prefix)}"],
-        cwd=mimalloc_build, check=True
-    )
-    print("[INFO] Building mimalloc...")
-    subprocess.run(["make", "-j", str(os.cpu_count() or 2)], cwd=mimalloc_build, check=True)
-    print("[INFO] Installing mimalloc to build output...")
-    subprocess.run(["make", "install"], cwd=mimalloc_build, check=True)
-    mod_dir = os.path.join(install_prefix, "smokinguns")
-    os.makedirs(mod_dir, exist_ok=True)
-    for lib in ["libmimalloc.so", "libmimalloc.so.3", "libmimalloc.so.3.5"]:
-        src_lib = os.path.join(install_prefix, "lib", lib)
-        if os.path.exists(src_lib):
-            shutil.copy2(src_lib, os.path.join(mod_dir, lib))
-            print(f"[INFO] Copied {lib} to {mod_dir}")
-    print("[PATCHED] mimalloc built and installed.")
-
-# ===========================================================================
-# Mirror download
-# ===========================================================================
-def crawl_and_download_mirror(base_url, target_base_dir, current_subpath="", max_depth=10):
-    if max_depth <= 0:
-        return
-    active_url = urllib.parse.urljoin(base_url, current_subpath)
-    try:
-        req = urllib.request.Request(active_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=60) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-        parser = DirectoryParser()
-        parser.feed(html_content)
-        local_dir = os.path.join(target_base_dir, current_subpath)
-        os.makedirs(local_dir, exist_ok=True)
-        if parser.files:
-            print(f"  Found {len(parser.files)} .pk3 file(s) in {active_url}")
-        for filename in sorted(set(parser.files)):
-            file_url = urllib.parse.urljoin(active_url, filename)
-            dest_path = os.path.join(local_dir, filename)
-            if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-                print(f"  [SKIP] Already exists: {filename}")
-                continue
-            try:
-                print(f"  Downloading: {filename} ...", end="", flush=True)
-                urllib.request.urlretrieve(file_url, dest_path)
-                size_mb = os.path.getsize(dest_path) / (1024 * 1024)
-                print(f" done ({size_mb:.1f} MB)")
-            except Exception as dl_err:
-                print(f" FAILED: {dl_err}")
-                if os.path.exists(dest_path):
-                    try:
-                        os.remove(dest_path)
-                    except OSError:
-                        pass
-        for subdir in sorted(set(parser.subdirs)):
-            clean_subdir = subdir.lstrip('/')
-            next_subpath = os.path.join(current_subpath, clean_subdir)
-            crawl_and_download_mirror(base_url, target_base_dir, next_subpath, max_depth - 1)
-    except Exception as e:
-        print(f"[ERROR] Crawling {active_url}: {e}")
-
-# ===========================================================================
-# autoexec.cfg
-# ===========================================================================
-def write_autoexec(output_mod_dir):
-    os.makedirs(output_mod_dir, exist_ok=True)
-    autoexec_path = os.path.join(output_mod_dir, "autoexec.cfg")
-    if os.path.exists(autoexec_path):
-        return
-    cvars = [
-        'seta s_musicvolume "0"',
-        'seta cg_boostfps "1"',
-        'seta cg_gunsmoke "0"',
-        'seta cg_glowflares "0"',
-        'seta r_picmip "5"',
-        'seta r_vertexLight "1"',
-        'seta r_dynamiclight "0"',
-        'seta r_fastsky "1"',
-        'seta com_maxfps "60"',
-        'seta com_busyWait "0"',
-    ]
-    with open(autoexec_path, 'w') as f:
-        f.write("// Auto-generated by patch_arm64.py\n")
-        f.write("\n".join(cvars) + "\n")
-    print(f"[INFO] autoexec.cfg written to {autoexec_path}")
-
-# ===========================================================================
-# Helpers
-# ===========================================================================
-def fix_git_safe_directory():
-    subprocess.run(
-        ["git", "config", "--global", "--add", "safe.directory", "/work"],
-        check=False, capture_output=True
-    )
-
-# ===========================================================================
-# Main
-# ===========================================================================
-def main():
-    print("=" * 60)
-    print(" Smokin' Guns ARM64 (RK3326 / Cortex-A35) Build Patcher")
-    print("=" * 60)
-    fix_git_safe_directory()
-    build_libsdl12_compat()
-    patch_makefile('Makefile')
-    patch_q_platform('code/qcommon/q_platform.h')
-    create_ui_syscalls('code/ui/ui_syscalls.c')   # <-- NEW
-    inject_neon_math('code/qcommon/q_math.c')
-    find_and_patch_simd_loops()
-    install_newer_cmake()
-    build_and_install_mimalloc()
-    cpu_count = os.cpu_count() or 2
-    cc = os.environ.get("CC", "gcc")
-    optimize_flags = (
-        "-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer "
-        "-ffast-math -ftree-vectorize -fno-math-errno -fno-trapping-math "
-        "-fno-semantic-interposition -fno-stack-protector "
-        "-fno-asynchronous-unwind-tables -fmerge-all-constants "
-        "-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon "
-        "-fopenmp-simd -flax-vector-conversions -mno-outline-atomics "
-        "-fno-unroll-loops"
-    )
-    compile_cmd = (
-        f"make -j{cpu_count} ARCH=aarch64 BUILD_GAME_SO=1 BUILD_GAME_QVM=0 "
-        f'CC="{cc}" OPTIMIZE="{optimize_flags}" '
-        f'LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,--strip-all"'
-    )
-    print(f"\n[INFO] Compiling with CC={cc}, {cpu_count} parallel jobs")
-    print(f"[INFO] OPTIMIZE flags: {optimize_flags}\n")
-    subprocess.run(compile_cmd, shell=True, check=True)
-
-    mirror_root = "http://download.smokin-guns.org/mirror.9k.lv/smokinguns/smokinguns/"
-    output_mod_dir = "build/release-linux-aarch64/smokinguns"
-    print(f"\n[INFO] Mirroring .pk3 assets from {mirror_root}")
-    print(f"[INFO] Target directory: {output_mod_dir}")
-    print(f"[INFO] Excluded: sg_pak0.pk3 (370 MB base package)\n")
-    crawl_and_download_mirror(mirror_root, output_mod_dir)
-    write_autoexec(output_mod_dir)
-    print("\n" + "=" * 60)
-    print(" Build complete!")
-    print("=" * 60)
-    print(f"\n Artifact contents: {os.path.abspath('build/release-linux-aarch64')}")
-    print(" Copy the entire folder to your device's port directory.")
-    print("=" * 60)
-
-if __name__ == '__main__':
-    main()
+# =====================================
