@@ -111,11 +111,6 @@ def patch_makefile(filepath="Makefile"):
             content, count=1, flags=re.MULTILINE
         )
 
-    # Append overrides for SDL, FreeType, and implicit-function declarations.
-    # The last matching GCC flag wins, so -Wno-error=implicit-function-declaration
-    # overrides the earlier -Werror-implicit-function-declaration from the Makefile.
-    # It MUST be added to BASE_CFLAGS (not CFLAGS) so that it appears after the
-    # original error flag in the final compile command.
     overrides = (
         "\n"
         "# ---- Overrides added by patch_arm64.py ----\n"
@@ -182,6 +177,31 @@ def patch_q_platform(filepath="code/qcommon/q_platform.h"):
         return True
     print("[WARN] Could not find insertion point in q_platform.h")
     return False
+
+# ===========================================================================
+# ui_syscalls.c creation (shared-library build)
+# ===========================================================================
+def create_ui_syscalls(filepath="code/ui/ui_syscalls.c"):
+    """
+    The SmokinGuns source tree only contains ui_syscalls.asm (for QVM builds).
+    The shared-library build (BUILD_GAME_SO=1) requires ui_syscalls.c to
+    declare the syscall function pointer.  Create it if missing.
+    """
+    if os.path.exists(filepath):
+        print(f"[SKIP] {filepath} already exists.")
+        return
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    content = (
+        '#include "ui_local.h"\n'
+        "\n"
+        "// This file is only used for the shared-library build.\n"
+        "// The engine sets this pointer when the UI library is loaded.\n"
+        "intptr_t (QDECL *syscall)( intptr_t arg, ... ) =\n"
+        "    (intptr_t (QDECL *)( intptr_t, ...)) - 1;\n"
+    )
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"[PATCHED] Created {filepath} for shared-library build.")
 
 # ===========================================================================
 # NEON math injection
@@ -406,6 +426,7 @@ def main():
     build_libsdl12_compat()
     patch_makefile('Makefile')
     patch_q_platform('code/qcommon/q_platform.h')
+    create_ui_syscalls('code/ui/ui_syscalls.c')   # <-- NEW
     inject_neon_math('code/qcommon/q_math.c')
     find_and_patch_simd_loops()
     install_newer_cmake()
