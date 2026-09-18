@@ -48,24 +48,13 @@ jobs:
               libsdl2-dev libopenal-dev libcurl4-openssl-dev \
               python3-urllib3 ccache pkg-config cmake libfreetype-dev
 
-            echo '===== SDL2 DIAGNOSTICS ====='
-            echo '--- sdl2-config --version ---'
-            sdl2-config --version 2>&1 || echo 'sdl2-config NOT FOUND'
-            echo '--- sdl2-config --cflags ---'
-            sdl2-config --cflags 2>&1 || echo 'sdl2-config --cflags FAILED'
-            echo '--- sdl2-config --libs ---'
-            sdl2-config --libs 2>&1 || echo 'sdl2-config --libs FAILED'
-            echo '--- SDL2 header location ---'
-            ls -la /usr/include/SDL2/SDL.h 2>&1 || echo 'SDL2 header NOT FOUND'
-            echo '===== END SDL2 DIAGNOSTICS ====='
-
             ccache -M 2G
             cd /work
             echo '===== RUNNING PATCH SCRIPT ====='
-            python3 -u .github/scripts/patch_arm64.py 2>&1 | tee /work/build-full.log
-            PATCH_RC=\${PIPESTATUS[0]}
-            echo \"===== PATCH SCRIPT EXITED WITH CODE \$PATCH_RC =====\"
-            exit \$PATCH_RC
+            python3 -u .github/scripts/patch_arm64.py
+
+            echo '===== RUNNING MAKE ====='
+            make -j\$(nproc) 2>&1 | tee /work/build-full.log
           "
 
       - name: Upload Full Build Log
