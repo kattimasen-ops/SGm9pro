@@ -42,6 +42,7 @@ jobs:
             -e PYTHONUNBUFFERED=1 \
             arm64v8/ubuntu:20.04 bash -c "
             set -e
+            set -o pipefail
             export DEBIAN_FRONTEND=noninteractive
             apt-get update && apt-get install -y \
               build-essential python3 python3-pip git \
@@ -54,7 +55,7 @@ jobs:
             python3 -u .github/scripts/patch_arm64.py
 
             echo '===== RUNNING MAKE ====='
-            make -j\$(nproc) 2>&1 | tee /work/build-full.log
+            make -j\$(nproc) ARCH=aarch64 BUILD_CLIENT=1 BUILD_GAME_SO=1 2>&1 | tee /work/build-full.log
           "
 
       - name: Upload Full Build Log
