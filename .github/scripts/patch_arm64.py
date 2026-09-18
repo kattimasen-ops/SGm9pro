@@ -124,7 +124,7 @@ def patch_q_platform():
 
 
 def patch_aim_assist():
-    """Inject Target Friction, S-Curve, and Recoil Assist into code/client/cl_input.c."""
+    """Inject Target Friction, S-Curve, and Recoil Assist safely into CL_MouseMove in code/client/cl_input.c."""
     target_file = None
     for root, _dirs, files in os.walk("code"):
         if "cl_input.c" in files:
@@ -151,9 +151,14 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     entityState_t *ent;
     vec3_t dir, forward;
     float dot, angleDelta;
-    float frictionFactor = 0.5f; // Sensitivitaet ueber Ziel auf 50% reduzieren
-    float maxAngle = 4.0f;       // Winkelbereich in Grad
+    float frictionFactor = 0.5f;
+    float maxAngle = 4.0f;
     qboolean targetFound = qfalse;
+
+    // Schutz: Nur im laufenden Spiel ausfuehren (nicht im Menue/Ladebildschirm)
+    if (clc.state != CA_ACTIVE) {
+        return;
+    }
 
     // 1. S-Kurve fuer Analogstick-Praezision (p = 1.8)
     if (cl.mouseDx != 0) {
@@ -162,7 +167,6 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     }
     if (cl.mouseDy != 0) {
         float signY = (cl.mouseDy < 0) ? -1.0f : 1.0f;
-        // Vertikalachse zusaetzlich auf 65% daempfen (Headshot Lock)
         cl.mouseDy = (int)(signY * powf(fabsf((float)cl.mouseDy), 1.8f) * 0.065f);
     }
 
@@ -196,21 +200,25 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     }
 
     // 3. Rueckstoss-Daempfung bei Dauerfeuer
-    if (cmd->buttons & BUTTON_ATTACK) {
+    if (cmd && (cmd->buttons & BUTTON_ATTACK)) {
         cl.viewangles[PITCH] += 0.35f;
     }
 }
 """
 
-    if "usercmd_t CL_CreateCmd(" in content:
-        content = content.replace("usercmd_t CL_CreateCmd(", c_patch + "\nusercmd_t CL_CreateCmd(")
-        content = content.replace("return cmd;", "    CL_ApplyHandheldAimAssist( &cmd );\n    return cmd;")
+    if "void CL_MouseMove(" in content:
+        content = content.replace("void CL_MouseMove(", c_patch + "\nvoid CL_MouseMove(")
+        content = re.sub(
+            r"(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)",
+            r"\1\n    CL_ApplyHandheldAimAssist(cmd);",
+            content
+        )
         with open(target_file, "w", encoding="utf-8") as f:
             f.write(content)
-        print(f"[PATCHED] {target_file}: Handheld Aim Assist & Input Curve injected")
+        print(f"[PATCHED] {target_file}: Aim Assist safely injected into CL_MouseMove")
         return True
     else:
-        print("[WARN] Could not find 'usercmd_t CL_CreateCmd' in cl_input.c")
+        print("[WARN] Could not find 'CL_MouseMove' in cl_input.c")
         return False
 
 
