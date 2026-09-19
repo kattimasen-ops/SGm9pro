@@ -2,9 +2,10 @@
 # ============================================================
 # Build-Skript fuer Smokin' Guns auf ARM64 / RK3326
 # Laeuft im Ubuntu 18.04 aarch64 Docker-Container.
-# Alle Performance-Optimierungen aus dem Original sind aktiv.
-# CMake 3.28.3 wird manuell installiert (gl4es braucht
-# check_compiler_flag, das erst ab CMake 3.18 existiert).
+#
+# GLIBC 2.27 (Ubuntu 18.04) → kompatibel mit dem Handheld (GLIBC 2.30).
+# gl4es wird mit -O2 gebaut: GCC 7 + QEMU + -O3 erzeugt ICE in listdraw.c.
+# Alle anderen Komponenten behalten die vollstaendigen Original-Flags.
 # ============================================================
 set -e
 
@@ -12,14 +13,19 @@ echo "==> pwd: $(pwd)"
 echo "==> Inhalt:"
 ls -la
 
-# --- Umgebungsvariablen -------------------------------------
-# Vollstaendiger OPTIMIZE-String mit ALLEN Original-Flags
+# --- Optimierungs-Flags -------------------------------------
+# Vollstaendiger Satz fuer alle Komponenten ausser gl4es
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
 -fno-math-errno -fno-trapping-math -fno-semantic-interposition \
 -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector \
 -fno-asynchronous-unwind-tables -fmerge-all-constants \
 -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon"
+
+# Reduzierter Satz NUR fuer gl4es (GCC 7 + QEMU ICE-Workaround)
+export OPTIMIZE_GL4ES="-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 \
+-fomit-frame-pointer -fcommon"
+
 export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -64,33 +70,30 @@ apt-get install -y --no-install-recommends \
 
 which sdl-config && sdl-config --version
 
-# ============================================================
-# [FIX] CMake 3.28.3 manuell installieren.
+# --- CMake 3.28.3 manuell installieren ----------------------
 # Ubuntu 18.04 hat CMake 3.10, das kein check_compiler_flag kennt.
-# gl4es braucht das, sonst bricht CMake mit "Unknown CMake command" ab.
-# ============================================================
-echo "==> Installing CMake 3.28.3 (Ubuntu 18.04's CMake 3.10 is too old)"
+echo "==> Installing CMake 3.28.3"
 CMAKE_VERSION=3.28.3
 cd /tmp
 wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
 mkdir -p /opt/cmake
 tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
 export PATH=/opt/cmake/bin:${PATH}
-echo "==> CMake version:"
 cmake --version
 
-# --- gl4es --------------------------------------------------
-echo "==> Building gl4es"
+# --- gl4es (mit OPTIMIZE_GL4ES, um GCC-7-QEMU-ICE zu vermeiden) ---
+echo "==> Building gl4es (with reduced optimization to avoid GCC 7 + QEMU ICE)"
 cd "${SRC_DIR}"
 git clone --depth=1 https://github.com/ptitSeb/gl4es.git
 cd gl4es
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_FLAGS="${OPTIMIZE}" \
+  -DCMAKE_C_FLAGS="${OPTIMIZE_GL4ES}" \
   -DNOX11=ON -DGBM=ON -DEGL_WRAPPER=ON \
   -DDEFAULT_ES=2 -DSTATICLIB=OFF
-make -j$(nproc)
+# -j2 statt -j4: reduziert QEMU-Race-Bedingungen weiter
+make -j2
 GL4ES_GL=$(find "${SRC_DIR}/gl4es" -name "libGL.so.1" -print -quit)
 GL4ES_EGL=$(find "${SRC_DIR}/gl4es" -name "libEGL.so.1" -print -quit)
 echo "Found libGL:  ${GL4ES_GL}"
@@ -98,7 +101,7 @@ echo "Found libEGL: ${GL4ES_EGL}"
 cp "${GL4ES_GL}"  "${OUT_LIBS}/libGL.so.1"
 cp "${GL4ES_EGL}" "${OUT_LIBS}/libEGL.so.1"
 
-# --- SDL2 ---------------------------------------------------
+# --- SDL2 (volle Optimierung) -------------------------------
 echo "==> Building SDL2"
 cd "${SRC_DIR}"
 git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git
@@ -114,7 +117,7 @@ SDL2_LIB=$(find /opt/sdl2 -name "libSDL2-2.0.so.0" -print -quit)
 echo "Found SDL2: ${SDL2_LIB}"
 cp "${SDL2_LIB}" "${OUT_LIBS}/libSDL2-2.0.so.0"
 
-# --- sdl12-compat -------------------------------------------
+# --- sdl12-compat (volle Optimierung) -----------------------
 echo "==> Building sdl12-compat"
 cd "${SRC_DIR}"
 git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
@@ -131,7 +134,7 @@ SDL12_LIB=$(find "${SRC_DIR}/sdl12-compat" -name "libSDL-1.2.so.0" -print -quit)
 echo "Found sdl12-compat: ${SDL12_LIB}"
 cp "${SDL12_LIB}" "${OUT_LIBS}/libSDL-1.2.so.0"
 
-# --- Smokin' Guns -------------------------------------------
+# --- Smokin' Guns (volle Optimierung) -----------------------
 echo "==> Building Smokin' Guns"
 cd "${SRC_DIR}"
 git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
