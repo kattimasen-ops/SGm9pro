@@ -3,13 +3,11 @@ name: Build Smokin' Guns (RK3326 / ARM64)
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build-aarch64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
       - name: Repository auschecken
@@ -17,27 +15,45 @@ jobs:
         with:
           submodules: recursive
 
-      - name: QEMU fuer ARM64 registrieren
+      - name: ARM64-Multiarch aktivieren
         run: |
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          sudo dpkg --add-architecture arm64
+          sudo bash -c 'cat > /etc/apt/sources.list.d/arm64.list <<EOF
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse
+          EOF'
+          sudo sed -i 's|^deb http://archive.ubuntu.com|deb [arch=amd64] http://archive.ubuntu.com|g' /etc/apt/sources.list
+          sudo sed -i 's|^deb http://security.ubuntu.com|deb [arch=amd64] http://security.ubuntu.com|g' /etc/apt/sources.list
+          sudo apt-get update
 
-      - name: Ubuntu 20.04 ARM64 Container bauen und Build ausfuehren
+      - name: Cross-Toolchain und ARM64-Abhaengigkeiten installieren
         run: |
-          docker run --rm \
-            --platform linux/arm64 \
-            -v "${{ github.workspace }}:/work" \
-            -w /work \
-            arm64v8/ubuntu:20.04 \
-            bash -c "
-              apt-get update || true
-              apt-get install -y ca-certificates wget
-              update-ca-certificates
-              bash /work/.github/scripts/build.sh
-            "
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git ccache python3 pkg-config wget \
+            crossbuild-essential-arm64 \
+            libsdl2-dev:arm64 libsdl1.2-dev:arm64 \
+            libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
+            libvorbis-dev:arm64 libogg-dev:arm64 \
+            libfreetype6-dev:arm64 libpng-dev:arm64 zlib1g-dev:arm64 \
+            libopus-dev:arm64 libopusfile-dev:arm64 libspeex-dev:arm64 \
+            libgbm-dev:arm64 libegl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 \
+            libdrm-dev:arm64 libx11-dev:arm64 libxext-dev:arm64 \
+            libgl1-mesa-dev:arm64 libglu1-mesa-dev:arm64 \
+            libudev-dev:arm64 libasound2-dev:arm64 libpulse-dev:arm64
+
+      - name: Verzeichnis vorbereiten
+        run: |
+          sudo mkdir -p /work
+          sudo chown -R $USER /work
+
+      - name: Cross-Compile ausfuehren
+        run: |
+          sudo -E bash .github/scripts/build.sh
 
       - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
           name: smokinguns-rk3326-aarch64
-          path: build-work/SmokinGuns/build/release-linux-aarch64/
+          path: /work/build-work/SmokinGuns/build/release-linux-aarch64/
           if-no-files-found: error
