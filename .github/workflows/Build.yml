@@ -1,4 +1,4 @@
-name: Build Smokin' Guns (RK3326 / ARM64)
+name: Build Smokin' Guns (RK3326 / ARM64 - Cross-Compile)
 
 on:
   push:
@@ -8,32 +8,16 @@ on:
 jobs:
   build-aarch64:
     runs-on: ubuntu-22.04
-
     steps:
       - name: Repository auschecken
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: ccache aus vorherigem Run wiederherstellen
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: ccache-${{ github.run_id }}
-          restore-keys: |
-            ccache-
-
-      - name: QEMU fuer ARM64 registrieren
+      - name: Cross-Compile im Ubuntu 20.04 x86_64 Container
         run: |
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-
-      - name: Build im Ubuntu 20.04 ARM64 Container
-        run: |
-          mkdir -p ccache
           docker run --rm \
-            --platform linux/arm64 \
             -v "${{ github.workspace }}:/work" \
-            -v "${{ github.workspace }}/ccache:/root/.ccache" \
             -w /work \
             ubuntu:20.04 \
             bash /work/.github/scripts/build.sh
