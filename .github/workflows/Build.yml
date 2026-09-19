@@ -15,9 +15,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Cross-Compile im Ubuntu 20.04 Container
+      - name: QEMU fuer ARM64 registrieren
+        run: |
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+      - name: Build im Ubuntu 20.04 ARM64 Container
         run: |
           docker run --rm \
+            --platform linux/arm64 \
             -v "${{ github.workspace }}:/work" \
             -w /work \
             ubuntu:20.04 \
@@ -27,5 +32,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smokinguns-rk3326-aarch64
-          path: build-work/SmokinGuns/build/release-linux-aarch64/
+          path: src/SmokinGuns/build/release-linux-aarch64/
           if-no-files-found: error
