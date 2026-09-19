@@ -50,6 +50,7 @@ jobs:
               python3-urllib3 ccache pkg-config cmake libfreetype-dev
 
             ccache -M 2G
+            git config --global --add safe.directory /work
             cd /work
             echo '===== RUNNING PATCH SCRIPT ====='
             python3 -u .github/scripts/patch_arm64.py
