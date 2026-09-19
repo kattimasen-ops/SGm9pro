@@ -7,9 +7,6 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-# [FIX] Explizite Berechtigungen fuer GHCR-Caching der run-on-arch-action.
-# Ohne packages: write verweigert GitHub den Push des Cache-Images und
-# der Container startet anschliessend ohne root-Rechte (apt-lock-Fehler).
 permissions:
   contents: read
   packages: write
@@ -19,8 +16,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Cortex-A35 Performance-Flags (RK3326 Quad-Core, ARMv8-A 64-bit)
-      # -O2 ist der etablierte, sichere Standard fuer die ioquake3-Engine.
       OPTIMIZE: "-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector -fmerge-all-constants -DNDEBUG"
       LDFLAGS: "-Wl,-O1 -Wl,--as-needed"
 
@@ -34,12 +29,11 @@ jobs:
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: aarch64
-          # Ubuntu 20.04 sichert die GLIBC 2.31 Kompatibilitaet fuer RK3326 OS
           distro: ubuntu20.04
-          # [FIX] githubToken wird jetzt mit packages:write-Berechtigung
-          # verwendet (siehe permissions-Block oben). Damit funktioniert
-          # das GHCR-Caching und der Container startet mit root-Rechten.
           githubToken: ${{ github.token }}
+          # [FIX] Container explizit als root starten, damit apt-get update
+          # im setup-Block die Lock-Dateien oeffnen kann.
+          dockerRunArgs: --user root
 
           setup: |
             apt-get update
