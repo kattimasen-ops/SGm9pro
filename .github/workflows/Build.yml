@@ -26,16 +26,21 @@ jobs:
           submodules: recursive
 
       - name: Build in Ubuntu 20.04 ARM64-Umgebung ausfuehren
-        uses: uraimo/run-on-arch-action@v2
+        uses: uraimo/run-on-arch-action@v3
         with:
           arch: aarch64
           distro: ubuntu20.04
           githubToken: ${{ github.token }}
-          # [FIX] Container explizit als root starten, damit apt-get update
-          # im setup-Block die Lock-Dateien oeffnen kann.
-          dockerRunArgs: --user root
 
+          # [FIX] setup laeuft auf dem Host als Runner-User.
+          # Nur Verzeichnisse anlegen, KEIN apt.
           setup: |
+            mkdir -p "${PWD}/build"
+
+          # [FIX] install laeuft IM CONTAINER waehrend docker build
+          # als root. apt-get funktioniert hier einwandfrei.
+          # Ab v3 verfuegbar.
+          install: |
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               build-essential \
@@ -53,6 +58,10 @@ jobs:
               libpng-dev \
               zlib1g-dev
             which sdl-config && sdl-config --version
+
+          # [FIX] run laeuft im Container nach dem Start.
+          # --user root stellt Schreibrechte fuer make sicher.
+          dockerRunArgs: --user root
 
           run: |
             python3 patch_arm64.py
