@@ -1,11 +1,8 @@
 #!/bin/bash
 # ============================================================
 # Build-Skript fuer Smokin' Guns auf ARM64 / RK3326
-# Laeuft im Ubuntu 18.04 aarch64 Docker-Container.
-#
-# GLIBC 2.27 (Ubuntu 18.04) → kompatibel mit Handheld (GLIBC 2.30).
-# GCC 9 aus ubuntu-toolchain-r/test → stabil unter QEMU.
-# (GCC 7 crasht unter QEMU mit ICE/Segfault in gl4es.)
+# Basiert auf dem funktionierenden Original-Build.
+# Laeuft im Ubuntu 20.04 aarch64 Container (GCC 9.4.0).
 # ============================================================
 set -e
 
@@ -13,7 +10,7 @@ echo "==> pwd: $(pwd)"
 echo "==> Inhalt:"
 ls -la
 
-# --- Umgebungsvariablen -------------------------------------
+# --- Umgebungsvariablen (identisch zum funktionierenden Build) ---
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
 -fno-math-errno -fno-trapping-math -fno-semantic-interposition \
@@ -33,26 +30,11 @@ mkdir -p "${OUT_LIBS}" "${SRC_DIR}"
 echo "==> apt-get update"
 apt-get update
 
-echo "==> apt-get install (Basis-Pakete)"
+echo "==> apt-get install"
 apt-get install -y --no-install-recommends \
-  ca-certificates \
-  software-properties-common \
-  gnupg \
-  wget
-
-# --- GCC 9 aus PPA installieren -----------------------------
-# GCC 7 (Ubuntu-18.04-Default) crasht unter QEMU.
-# GCC 9 ist stabil und ausgereift fuer aarch64-QEMU.
-echo "==> Adding ubuntu-toolchain-r/test PPA for GCC 9"
-add-apt-repository -y ppa:ubuntu-toolchain-r/test
-apt-get update
-
-echo "==> Installing GCC 9 and all build dependencies"
-apt-get install -y --no-install-recommends \
-  build-essential \
-  gcc-9 g++-9 \
-  make cmake git ccache python3 pkg-config \
+  build-essential gcc g++ make cmake git ccache python3 pkg-config \
   autoconf automake libtool \
+  wget \
   libsdl1.2-dev \
   libfreetype6-dev \
   libjpeg-dev \
@@ -77,25 +59,10 @@ apt-get install -y --no-install-recommends \
   libasound2-dev \
   libpulse-dev
 
-# --- Compiler auf GCC 9 umstellen ---------------------------
-echo "==> Setting GCC 9 as the default compiler"
-update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90 \
-  --slave /usr/bin/g++ g++ /usr/bin/g++-9 \
-  --slave /usr/bin/gcc-ar gcc-ar /usr/bin/gcc-ar-9 \
-  --slave /usr/bin/gcc-nm gcc-nm /usr/bin/gcc-nm-9 \
-  --slave /usr/bin/gcc-ranlib gcc-ranlib /usr/bin/gcc-ranlib-9
-
-export CC=gcc-9
-export CXX=g++-9
-echo "==> gcc version:"
-gcc --version
-echo "==> g++ version:"
-g++ --version
-
 which sdl-config && sdl-config --version
 
 # --- CMake 3.28.3 manuell installieren ----------------------
-# Ubuntu 18.04 hat CMake 3.10, das kein check_compiler_flag kennt.
+# Ubuntu 20.04 hat CMake 3.16, das kein check_compiler_flag kennt.
 echo "==> Installing CMake 3.28.3"
 CMAKE_VERSION=3.28.3
 cd /tmp
@@ -106,7 +73,6 @@ export PATH=/opt/cmake/bin:${PATH}
 cmake --version
 
 # --- gl4es --------------------------------------------------
-# Mit GCC 9 ist die volle Optimierung wieder sicher.
 echo "==> Building gl4es"
 cd "${SRC_DIR}"
 git clone --depth=1 https://github.com/ptitSeb/gl4es.git
@@ -114,7 +80,6 @@ cd gl4es
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=gcc-9 \
   -DCMAKE_C_FLAGS="${OPTIMIZE}" \
   -DNOX11=ON -DGBM=ON -DEGL_WRAPPER=ON \
   -DDEFAULT_ES=2 -DSTATICLIB=OFF
@@ -134,7 +99,6 @@ cd SDL
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=gcc-9 \
   -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
   -DSDL_STATIC=OFF -DSDL_SHARED=ON \
   -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
@@ -152,7 +116,6 @@ python3 "${PATCH_SCRIPT}"
 mkdir -p build && cd build
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=gcc-9 \
   -DSDL2_INCLUDE_DIR=/opt/sdl2/include/SDL2 \
   -DSDL2_LIBRARY=/opt/sdl2/lib/libSDL2-2.0.so \
   -DCMAKE_C_FLAGS="${OPTIMIZE} -fvisibility=default"
@@ -172,7 +135,7 @@ make release -j$(nproc) \
   PLATFORM=linux \
   ARCH=aarch64 \
   COMPILE_ARCH=aarch64 \
-  CC="ccache gcc-9" \
+  CC="ccache gcc" \
   BUILD_STANDALONE=1 \
   Q3UIDIR=code/ui \
   BUILD_GAME_QVM=0 \
