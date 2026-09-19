@@ -1,389 +1,64 @@
-name: Bastel mir Smokin' Guns for RK3326 (PortMaster)
+name: Baue Smokin' Guns (RK3326 / ARM64)
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - '.github/workflows/build-smokinguns.yml'
-      - '.github/scripts/patch_arm64.py'
-
-permissions:
-  contents: read
-
-env:
-  ZIP_NAME: SmokinGuns-PortMaster-RK3326-SDL12Compat.zip
-  PORT_DIR: smokinguns
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 360
+  build-aarch64:
+    runs-on: ubuntu-latest
+
+    env:
+      # Cortex-A35 Performance-Flags (RK3326 Quad-Core, ARMv8-A 64-bit)
+      # -O2 ist der etablierte, sichere Standard für die ioquake3-Engine.
+      OPTIMIZE: "-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector -fmerge-all-constants -DNDEBUG"
+      LDFLAGS: "-Wl,-O1 -Wl,--as-needed"
+
     steps:
-      - name: Checkout
+      - name: Repository auschecken
         uses: actions/checkout@v4
-
-      - name: Install zip utility
-        run: sudo apt-get update -y && sudo apt-get install -y zip
-
-      - name: Set up QEMU for arm64 emulation
-        uses: docker/setup-qemu-action@v3
         with:
-          platforms: arm64
+          submodules: recursive
 
-      - name: Write in-container build script
-        run: |
-          mkdir -p work/src work/out/game work/out/libs.aarch64
-          cp .github/scripts/patch_arm64.py work/patch_arm64.py
+      - name: Build in Ubuntu 20.04 ARM64-Umgebung ausführen
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: aarch64
+          # Ubuntu 20.04 sichert die GLIBC 2.31 Kompatibilität für RK3326 OS (ArkOS/AmberELEC)
+          distro: ubuntu20.04
+          githubToken: ${{ github.token }}
 
-          cat > work/build.sh << 'BUILD_SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          set -x
-          export DEBIAN_FRONTEND=noninteractive
+          setup: |
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              build-essential \
+              gcc \
+              g++ \
+              make \
+              ccache \
+              python3 \
+              libsdl1.2-dev \
+              libopenal-dev \
+              libcurl4-openssl-dev \
+              libvorbis-dev \
+              libogg-dev \
+              libfreetype6-dev \
+              libpng-dev \
+              zlib1g-dev
+            # Kein sdl12-compat-dev installieren - vermeidet Header-Konflikte
+            which sdl-config && sdl-config --version
 
-          export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize -fno-math-errno -fno-trapping-math -fno-semantic-interposition -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector -fno-asynchronous-unwind-tables -fmerge-all-constants -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon"
-          export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
+          run: |
+            python3 patch_arm64.py
+            make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release \
+              OPTIMIZE="$OPTIMIZE" \
+              LDFLAGS="$LDFLAGS"
 
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential git pkg-config ca-certificates wget file zip python3 ccache \
-            libsdl1.2-dev \
-            libfreetype6-dev libjpeg-dev libpng-dev zlib1g-dev \
-            libogg-dev libvorbis-dev libopus-dev libopusfile-dev \
-            libcurl4-openssl-dev libopenal-dev libspeex-dev \
-            libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libdrm-dev \
-            libx11-dev libxext-dev libgl1-mesa-dev libglu1-mesa-dev \
-            libudev-dev libasound2-dev libpulse-dev \
-            autoconf automake libtool
-          git config --global --add safe.directory '*'
-
-          ccache -M 2G
-          export CC="ccache gcc"
-          export CXX="ccache g++"
-
-          CMAKE_VERSION=3.28.3
-          wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
-          mkdir -p /opt/cmake
-          tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
-          export PATH="/opt/cmake/bin:$PATH"
-
-          # ----------------------------------------------------------------
-          # GL4ES
-          # ----------------------------------------------------------------
-          cd /work/src
-          if [ ! -d gl4es ]; then git clone --depth=1 https://github.com/ptitSeb/gl4es.git; fi
-          cd gl4es
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="$OPTIMIZE" \
-            -DNOX11=ON -DGBM=ON -DEGL_WRAPPER=ON \
-            -DDEFAULT_ES=2 -DSTATICLIB=OFF
-          make -j"$(nproc)"
-
-          GL4ES_LIB="$(find /work/src/gl4es -name 'libGL.so.1' -print -quit)"
-          EGL_LIB="$(find /work/src/gl4es -name 'libEGL.so.1' -print -quit)"
-          [ -n "$GL4ES_LIB" ] && [ -n "$EGL_LIB" ] || { echo "[ERROR] GL4ES libs missing"; exit 1; }
-          cp "$GL4ES_LIB" /work/out/libs.aarch64/libGL.so.1
-          cp "$EGL_LIB"  /work/out/libs.aarch64/libEGL.so.1
-
-          # ----------------------------------------------------------------
-          # Compile Modern SDL2 (2.30) from Source
-          # ----------------------------------------------------------------
-          cd /work/src
-          if [ ! -d SDL ]; then git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git; fi
-          cd SDL
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
-            -DSDL_STATIC=OFF -DSDL_SHARED=ON \
-            -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
-          make -j"$(nproc)" install
-
-          SDL2_NEW="$(find /opt/sdl2 -name 'libSDL2-2.0.so.0' -print -quit)"
-          [ -n "$SDL2_NEW" ] || { echo "[ERROR] Modern SDL2 not found"; exit 1; }
-          cp "$SDL2_NEW" /work/out/libs.aarch64/libSDL2-2.0.so.0
-
-          # ----------------------------------------------------------------
-          # sdl12-compat
-          # ----------------------------------------------------------------
-          cd /work/src
-          if [ ! -d sdl12-compat ]; then
-            git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
-          fi
-          cd sdl12-compat
-
-          echo "==> Patching sdl12-compat..."
-          python3 /work/patch_arm64.py
-
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DSDL2_INCLUDE_DIR=/opt/sdl2/include/SDL2 \
-            -DSDL2_LIBRARY="$(find /opt/sdl2 -name 'libSDL2-2.0.so' -print -quit)" \
-            -DCMAKE_C_FLAGS="$OPTIMIZE -fvisibility=default"
-          make -j"$(nproc)"
-
-          SDL12_LIB="$(find /work/src/sdl12-compat -name 'libSDL-1.2.so.0' -print -quit)"
-          [ -n "$SDL12_LIB" ] || { echo "[ERROR] sdl12-compat lib not produced"; exit 1; }
-          cp "$SDL12_LIB" /work/out/libs.aarch64/libSDL-1.2.so.0
-
-          # ----------------------------------------------------------------
-          # Smokin' Guns
-          # ----------------------------------------------------------------
-          cd /work/src
-          if [ ! -d SmokinGuns ]; then git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git; fi
-          cd SmokinGuns
-
-          echo "==> Patching Smokin' Guns (Makefile + q_platform.h only)..."
-          python3 /work/patch_arm64.py
-
-          rm -rf build/release-linux-aarch64/ || true
-
-          echo "==> Building Smokin' Guns (native SO, sdl12-compat)"
-          make release -j"$(nproc)" \
-            PLATFORM=linux ARCH=aarch64 COMPILE_ARCH=aarch64 \
-            CC="$CC" \
-            BUILD_STANDALONE=1 Q3UIDIR=code/ui BUILD_GAME_QVM=0 BUILD_GAME_SO=1 BUILD_SERVER=0 \
-            BUILD_RENDERER_REND2=0 \
-            USE_OPENAL=0 USE_CODEC_VORBIS=0 USE_CURL=0 USE_MUMBLE=0 USE_VOIP=0 \
-            USE_INTERNAL_ZLIB=1 USE_INTERNAL_SPEEX=1 USE_LOCAL_HEADERS=0 \
-            WERROR=0 \
-            OPTIMIZE="$OPTIMIZE" LDFLAGS="$LDFLAGS"
-
-          BUILD_OUT="$(find /work/src/SmokinGuns/build -maxdepth 1 -type d -name 'release-linux-aarch64' -print -quit)"
-          [ -n "$BUILD_OUT" ] || { echo "[ERROR] build dir missing"; exit 1; }
-
-          ENGINE_BIN="$(find "$BUILD_OUT" -maxdepth 1 -type f -executable ! -name '*.so' ! -name '*.sh' ! -name '*.a' -print -quit)"
-          [ -n "$ENGINE_BIN" ] || { echo "[ERROR] engine binary missing"; exit 1; }
-          cp "$ENGINE_BIN" /work/out/game/smokinguns.aarch64
-          chmod +x /work/out/game/smokinguns.aarch64
-
-          find "$BUILD_OUT" -maxdepth 1 -name 'renderer_*.so' -exec cp {} /work/out/game/ \;
-
-          if [ -d "$BUILD_OUT/smokinguns" ]; then
-            mkdir -p /work/out/game/modules
-            find "$BUILD_OUT/smokinguns" -maxdepth 1 -name '*.so' -exec cp {} /work/out/game/modules/ \;
-          fi
-
-          echo "Build finished successfully."
-          BUILD_SCRIPT_EOF
-          chmod +x work/build.sh
-
-      - name: Build inside Ubuntu 20.04 aarch64 container
-        run: |
-          docker run --rm --platform linux/arm64 \
-            -v "${{ github.workspace }}/work":/work \
-            -w /work ubuntu:20.04 bash /work/build.sh
-
-      - name: Assemble PortMaster Package
-        run: |
-          set -euo pipefail
-          PKG="$GITHUB_WORKSPACE/package"
-          rm -rf "$PKG"
-          mkdir -p "$PKG/${PORT_DIR}/libs.aarch64"
-          mkdir -p "$PKG/${PORT_DIR}/${PORT_DIR}"
-
-          cp work/out/game/smokinguns.aarch64 "$PKG/${PORT_DIR}/smokinguns.aarch64"
-          chmod +x "$PKG/${PORT_DIR}/smokinguns.aarch64"
-
-          find work/out/game -maxdepth 1 -name 'renderer_*.so' -exec cp {} "$PKG/${PORT_DIR}/" \;
-
-          if [ -d work/out/game/modules ]; then
-            find work/out/game/modules -maxdepth 1 -name '*.so' -exec cp {} "$PKG/${PORT_DIR}/${PORT_DIR}/" \;
-          fi
-
-          cp work/out/libs.aarch64/libGL.so.1       "$PKG/${PORT_DIR}/libs.aarch64/libGL.so.1"
-          cp work/out/libs.aarch64/libEGL.so.1      "$PKG/${PORT_DIR}/libs.aarch64/libEGL.so.1"
-          cp work/out/libs.aarch64/libSDL-1.2.so.0  "$PKG/${PORT_DIR}/libs.aarch64/libSDL-1.2.so.0"
-          cp work/out/libs.aarch64/libSDL2-2.0.so.0 "$PKG/${PORT_DIR}/libs.aarch64/libSDL2-2.0.so.0"
-
-          cat > "$PKG/${PORT_DIR}/smokinguns.gptk" << 'GPTK_EOF'
-          [ANALOG1]
-          UP = W
-          DOWN = S
-          LEFT = A
-          RIGHT = D
-
-          [ANALOG2]
-          UP = mouse_move_up
-          DOWN = mouse_move_down
-          LEFT = mouse_move_left
-          RIGHT = mouse_move_right
-
-          [BUTTONS]
-          A = mouse_left
-          B = mouse_right
-          X = SPACE
-          Y = R
-          L1 = TAB
-          R1 = mouse_middle
-          L2 = Q
-          R2 = E
-          START = ESCAPE
-          SELECT = F1
-          L3 = LEFTSHIFT
-          R3 = C
-          UP = UP
-          DOWN = DOWN
-          LEFT = LEFT
-          RIGHT = RIGHT
-          GPTK_EOF
-
-          cat > "$PKG/${PORT_DIR}/${PORT_DIR}/PUT_YOUR_PK3_FILES_HERE.txt" << 'PLACEHOLDER_EOF'
-          Copy your own legally obtained Smokin' Guns .pk3 data files
-          (e.g. sg_pak0.pk3) into this folder before launching the port.
-          PLACEHOLDER_EOF
-
-          cat > "$PKG/${PORT_DIR}/port.json" << 'PORTJSON_EOF'
-          {
-            "version": 3,
-            "name": "Smokin Guns.sh",
-            "items": ["Smokin Guns.sh"],
-            "items_opt": [],
-            "attr": {
-              "title": "Smokin' Guns",
-              "porter": "community",
-              "desc": "Native ARM64 build with GL4ES and sdl12-compat (KMSDRM backend). Cortex-A35 optimized.",
-              "genres": ["fps", "shooter"],
-              "porter_wallet": "",
-              "image": {"screenshot": ""},
-              "rtr": false
-            }
-          }
-          PORTJSON_EOF
-
-          cat > "$PKG/Smokin Guns.sh" << 'LAUNCH_EOF'
-          #!/bin/bash
-          # PortMaster launch script for Smokin' Guns (RK3326 / ArkOS4Clone)
-
-          GAMEDIR="/roms/ports/smokinguns"
-          LOG_FILE="${GAMEDIR}/debug.log"
-          exec > >(tee -a "$LOG_FILE") 2>&1
-          echo "=== Smokin' Guns launch (sdl12-compat) ==="
-          echo "Date: $(date)"
-
-          XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
-          if [ -d "/opt/system/Tools/PortMaster/" ]; then
-              controlfolder="/opt/system/Tools/PortMaster"
-          elif [ -d "/opt/tools/PortMaster/" ]; then
-              controlfolder="/opt/tools/PortMaster"
-          elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
-              controlfolder="$XDG_DATA_HOME/PortMaster"
-          else
-              controlfolder="/roms/ports/PortMaster"
-          fi
-
-          if [ -f "${controlfolder}/control.txt" ]; then
-              source "${controlfolder}/control.txt"
-              [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
-              get_controls
-          fi
-
-          cd "$GAMEDIR" || exit 1
-          export HOME="${GAMEDIR}"
-          mkdir -p "${GAMEDIR}/.smokinguns"
-
-          echo "performance" | $ESUDO tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null 2>&1 || true
-
-          export SDL_VIDEODRIVER=kmsdrm
-          export SDL_AUDIODRIVER=alsa
-          export SDL_JOYSTICK_DEVICE=/dev/input/js0
-
-          export LIBGL_ES=2
-          export LIBGL_GL=1
-          export LIBGL_NOTEST=1
-          export LIBGL_FB=1
-          export LIBGL_FBO=640x480
-          export LIBGL_NOERROR=1
-          export LIBGL_FORCE16BITS=1
-          export LIBGL_BATCH=100
-          export LIBGL_BEGINEND=2
-          export LIBGL_FASTMATH=1
-          export LIBGL_NOBANNER=1
-          export LIBGL_VSYNC=0
-          export LIBGL_SILENTSTUB=1
-          export LIBGL_XREFRESH=0
-          export LIBGL_RECYCLEFBO=1
-          export LIBGL_MIPMAP=0
-          export LIBGL_SHRINK=0
-
-          export SDL12COMPAT_OPENGL_SCALING=0
-
-          export LD_LIBRARY_PATH="${GAMEDIR}/libs.aarch64:${LD_LIBRARY_PATH}"
-
-          $GPTOKEYB "smokinguns.aarch64" -c "${GAMEDIR}/smokinguns.gptk" &
-          GPTOKEYB_PID=$!
-
-          LD_PRELOAD="${GAMEDIR}/libs.aarch64/libSDL2-2.0.so.0:${GAMEDIR}/libs.aarch64/libSDL-1.2.so.0:${GAMEDIR}/libs.aarch64/libGL.so.1:${GAMEDIR}/libs.aarch64/libEGL.so.1" \
-            "${GAMEDIR}/smokinguns.aarch64" \
-            +set fs_basepath "${GAMEDIR}" \
-            +set fs_homepath "${GAMEDIR}" \
-            +set fs_game smokinguns \
-            +set name "St0len-One" \
-            +set net_enabled 1 \
-            +set cl_master master.smokin-guns.org \
-            +set com_hunkMegs 256 \
-            +set com_maxfps 60 \
-            +set cl_maxpackets 30 \
-            +set rate 15000 \
-            +set cg_forceModel 1 \
-            +set cg_blood 0 \
-            +set cg_brassTime 0 \
-            +set cg_gibs 0 \
-            +set cg_marks 0 \
-            +set cg_impactparticles 0 \
-            +set cg_shadows 0 \
-            +set s_musicvolume 0 \
-            +set s_khz 11 \
-            +set sv_pure 0 \
-            +set in_mouse 1 \
-            +set in_nograb 0 \
-            +set in_joystick 0 \
-            +set r_mode -1 \
-            +set r_customwidth 640 \
-            +set r_customheight 480 \
-            +set r_fullscreen 1 \
-            +set r_vertexLight 1 \
-            +set r_overBrightBits 0 \
-            +set r_ignorehwgamma 1 \
-            +set r_ext_compressed_textures 1 \
-            +set r_ext_framebuffer 0 \
-            +set r_picmip 2 \
-            +set r_lodbias 2 \
-            +set r_subdivisions 8 \
-            +set r_detailtextures 0 \
-            +set r_texturebits 16 \
-            +set r_colorbits 16 \
-            +set r_dynamiclight 0 \
-            +set r_shadows 0 \
-            +set r_fastsky 1 \
-            +set r_swapInterval 0 \
-            +set sensitivity 18 \
-            +set cl_yawspeed 140 \
-            +set cl_pitchspeed 140 \
-            +set vm_game 0 \
-            +set vm_cgame 0 \
-            +set vm_ui 0 \
-            +set cl_allowDownload 1 \
-            +set cl_wwwDownload 1
-
-          GAME_EXIT=$?
-          echo "Game exited with code: ${GAME_EXIT}"
-
-          unset LD_PRELOAD
-          unset LD_LIBRARY_PATH
-          [ -n "$GPTOKEYB_PID" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
-          exit $GAME_EXIT
-          LAUNCH_EOF
-          chmod +x "$PKG/Smokin Guns.sh"
-
-      - name: Create zip artifact
-        run: |
-          cd package
-          zip -r "$GITHUB_WORKSPACE/${ZIP_NAME}" "Smokin Guns.sh" "${PORT_DIR}"
-
-      - name: Upload artifact
+      - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: SmokinGuns-PortMaster-RK3326-SDL12Compat
-          path: ${{ env.ZIP_NAME }}
-          if-no-files-found: error
+          name: smokinguns-rk3326-aarch64
+          path: build/release-linux-aarch64/
