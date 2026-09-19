@@ -2,9 +2,12 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
-[EXTENDED] Handheld aim assist for GAMEPAD via GPtk (Maus-Emulation):
+[EXTENDED] Handheld aim assist v4 (GPtk Maus-Emulation):
   - S-Curve + Target Friction on cl.mouseDx/cl.mouseDy (CL_MouseMove)
-  - Rotational Aim Magnetism on cl.viewangles (CL_CreateCmd after CL_JoystickMove)
+  - Rotational Aim Magnetism + Fire-Assist on cl.viewangles
+    (CL_CreateCmd, after CL_JoystickMove)
+  - Line-of-sight check via CM_BoxTrace -> no aim through walls
+  - Stronger magnetism, wider cone, extra pull while firing
 """
 
 import os
@@ -152,22 +155,19 @@ def patch_sdl12_compat_hints():
 
 
 # =====================================================================
-# [EXTENDED] Handheld Aim Assist fuer GPtk-emuliertes Maus-Input
+# [EXTENDED] Handheld Aim Assist v4 - staerker + Fire-Assist
 # =====================================================================
 def patch_aim_assist():
-    """Injiziert zwei sauber getrennte Eingriffe in cl_input.c.
+    """Injiziert zwei Hooks plus Zielsuchfunktion mit LOS-Check.
 
-    Weil GPtk den rechten Stick als Maus-Deltas einspeist, arbeitet der
-    Aim-Assist auf cl.mouseDx/cl.mouseDy. Der Magnetismus muss aber NACH
-    der Maus-Verarbeitung angewendet werden, sonst ueberschreibt die
-    Maus-Bewegung die Korrektur.
-
-    Einhaengepunkte:
-      * CL_HandheldInputCurve()    -> am Anfang von CL_MouseMove
-      * CL_HandheldAimMagnetism()  -> in CL_CreateCmd, nach CL_JoystickMove
-
-    Wichtig: Die Helper-Funktionen muessen VOR CL_MouseMove stehen,
-    weil C keine impliziten Deklarationen von static-Funktionen erlaubt.
+    Verbesserungen gegenueber v3:
+      * Staerkerer Grund-Magnetismus (0.24 / 0.15 statt 0.16 / 0.09)
+      * Groesserer Kegel (15 Grad statt 12 Grad)
+      * Fire-Assist: waehrend BUTTON_ATTACK wird der Sog verdoppelt,
+        damit das Crosshair im Moment des Schusses exakt auf dem
+        Ziel liegt - ohne Snap, ohne Aimbot.
+      * Zielpunkt hoeher (32 Units, naeher an Brustmitte)
+      * Laengeres Sticky-Target (10 Frames)
     """
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -188,23 +188,20 @@ def patch_aim_assist():
 
     helper_code = r"""
 /* ============================================================
- * [PATCHED] Handheld Aim Assist (GPtk Maus-Emulation)
+ * [PATCHED] Handheld Aim Assist v4
  * ============================================================
  *  Auf einem RK3326-Handheld wird der rechte Stick von GPtk als
  *  Mausbewegung an die Engine gegeben (cl.mouseDx/cl.mouseDy).
- *  Darum arbeiten beide Hooks auf dem Maus-Pfad, nicht auf den
- *  Joystick-Achsen (die von GPtk nie gesetzt werden).
  *
- *  Features:
- *    * S-Curve           - subtile Feinkontrolle auf kleinen Deltas
- *    * Target Friction   - Input-Daempfung nahe am Ziel
- *    * Aim Magnetism     - sanfter Sog zum naechsten Gegner
- *    * Active-Aim Gate   - Magnet nur bei aktivem Maus-Input
- *    * Sticky Target     - verhindert Flackern bei nahen Zielen
+ *  Version 4:
+ *    - Staerkerer Grund-Magnetismus
+ *    - Groesserer Kegel (15 Grad)
+ *    - Fire-Assist: extra Sog waehrend BUTTON_ATTACK
+ *    - Line-of-Sight-Check via CM_BoxTrace
+ *    - Always-on Magnetismus (kein Active-Aim-Gate)
  *
- *  Beide Hooks sind client-seitig und beruehren weder Server noch
- *  Protokoll. Sie sind so konstruiert, dass die Maus-Verarbeitung
- *  von CL_MouseMove erhalten bleibt.
+ *  Bewusst KEIN Snap-to-Target: das Crosshair wird sanft gezogen,
+ *  auch im Fire-Assist-Fenster.
  * ============================================================ */
 #include <math.h>
 
@@ -218,26 +215,51 @@ def patch_aim_assist():
 
 /* --- Tuning ------------------------------------------------- */
 #define HHA_PI                3.14159265358979323846f
-#define HHA_MAX_ANGLE        10.0f    /* aeusserer Magnet-Kegel (Grad)    */
-#define HHA_FALLOFF_ANGLE     4.0f    /* voller Magnet bis zu diesem Winkel */
-#define HHA_MAGNETISM_YAW     0.22f   /* horizontaler Sog pro Frame       */
-#define HHA_MAGNETISM_PITCH   0.12f   /* vertikaler Sog pro Frame         */
-#define HHA_FRICTION          0.80f   /* Input-Skalierung bei Zielnaehe   */
-#define HHA_FRICTION_MAX_MAG 30.0f    /* Friction nur unter diesem Delta  */
-#define HHA_CURVE_EXP         1.05f   /* fast linear - keine Verlangsamung */
-#define HHA_CURVE_REF        32.0f    /* Bezug fuer die Kurve             */
-#define HHA_STICKY_FRAMES    12
-#define HHA_AIM_ACTIVE_FRAMES 12
-#define HHA_AIM_THRESHOLD     0.5f    /* 1 Rohdelta = "aktiv"             */
+#define HHA_MAX_ANGLE        15.0f    /* aeusserer Magnet-Kegel (Grad)    */
+#define HHA_FALLOFF_ANGLE     7.0f    /* voller Magnet bis zu diesem Winkel */
+#define HHA_MAGNETISM_YAW     0.24f   /* normaler horizontaler Sog        */
+#define HHA_MAGNETISM_PITCH   0.15f   /* normaler vertikaler Sog          */
+#define HHA_FIRE_YAW          0.45f   /* Sog waehrend Schuss (horizontal) */
+#define HHA_FIRE_PITCH        0.28f   /* Sog waehrend Schuss (vertikal)   */
+#define HHA_FRICTION          0.75f   /* Input-Daempfung bei Zielnaehe    */
+#define HHA_FRICTION_MAX_MAG 40.0f    /* Friction nur unter diesem Delta  */
+#define HHA_CURVE_EXP         1.05f   /* fast linear                      */
+#define HHA_CURVE_REF        32.0f
+#define HHA_STICKY_FRAMES    10
 #define HHA_MAX_DIST         4096.0f
 #define HHA_MIN_DIST           48.0f
+#define HHA_CHEST_HEIGHT     32.0f    /* hoeher als v3, Richtung Brustmitte */
+#define HHA_LOS_LENGTH     32768.0f
 /* ------------------------------------------------------------ */
 
-static int hha_lastTargetNum   = -1;
-static int hha_lastTargetAge   = 0;
-static int hha_recentAimFrames = 0;
+static int hha_lastTargetNum = -1;
+static int hha_lastTargetAge = 0;
 
-/* ---- Zielerkennung (arbeitet auf cl.snap / cl.parseEntities) ---- */
+/* Zwischenspeicher: pro Frame einmal bestimmen, in beiden Hooks nutzen */
+static int      hha_cachedTarget   = -1;
+static float    hha_cachedAngle    = 999.0f;
+static vec3_t   hha_cachedDir      = { 0, 0, 0 };
+static qboolean hha_cachedValid    = qfalse;
+
+/* ---- Sichtlinien-Check zwischen Auge und Ziel-Torso -------- */
+static qboolean HHA_HasLineOfSight( const vec3_t fromFeet, const vec3_t toFeet ) {
+    trace_t tr;
+    vec3_t  eye, chest;
+
+    eye[0] = fromFeet[0];
+    eye[1] = fromFeet[1];
+    eye[2] = fromFeet[2] + cl.snap.ps.viewheight;
+
+    chest[0] = toFeet[0];
+    chest[1] = toFeet[1];
+    chest[2] = toFeet[2] + HHA_CHEST_HEIGHT;
+
+    CM_BoxTrace( &tr, eye, chest, NULL, NULL, 0, CONTENTS_SOLID );
+
+    return ( tr.fraction >= 0.999f );
+}
+
+/* ---- Zielerkennung mit LOS ------------------------------- */
 static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
     int    i, best = -1;
     float  bestAngle = HHA_MAX_ANGLE;
@@ -281,11 +303,14 @@ static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
         angle = acosf( dot ) * ( 180.0f / HHA_PI );
 
         /* Sticky-Bonus: vorheriges Ziel bleibt bevorzugt */
-        if ( ent->number == hha_lastTargetNum && angle < HHA_MAX_ANGLE + 4.0f ) {
-            angle *= 0.70f;
+        if ( ent->number == hha_lastTargetNum && angle < HHA_MAX_ANGLE + 5.0f ) {
+            angle *= 0.65f;
         }
 
         if ( angle < bestAngle ) {
+            if ( !HHA_HasLineOfSight( cl.snap.ps.origin, ent->pos.trBase ) ) {
+                continue;
+            }
             bestAngle = angle;
             best      = ent->number;
             VectorCopy( toEnt, bestDir );
@@ -296,38 +321,34 @@ static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
     return best;
 }
 
-/* ---- Hook 1: Input-Kurve + Friction ------------------------
- * Wird am Anfang von CL_MouseMove aufgerufen. Modifiziert die
- * rohen Maus-Deltas in cl.mouseDx[cl.mouseIndex] / cl.mouseDy
- * BEVOR CL_MouseMove sie in mx/my kopiert und die Bildwinkel
- * aktualisiert.
- * ------------------------------------------------------------ */
+/* ---- Ziel pro Frame einmal bestimmen ---------------------- */
+static void HHA_UpdateCachedTarget( void ) {
+    hha_cachedTarget = HHA_FindTarget( hha_cachedDir, &hha_cachedAngle );
+    hha_cachedValid  = qtrue;
+
+    if ( hha_cachedTarget >= 0 ) {
+        hha_lastTargetNum = hha_cachedTarget;
+        hha_lastTargetAge = 0;
+    } else if ( ++hha_lastTargetAge > HHA_STICKY_FRAMES ) {
+        hha_lastTargetNum = -1;
+    }
+}
+
+/* ---- Hook 1: Input-Kurve + Friction ----------------------- */
 static void CL_HandheldInputCurve( void ) {
     int   *mx_raw = &cl.mouseDx[cl.mouseIndex];
     int   *my_raw = &cl.mouseDy[cl.mouseIndex];
     float  mag;
     float  friction = 1.0f;
-    vec3_t dir;
-    float  ang;
 
-    /* Aktiv-Aim-Zaehler: kleine Schwelle, damit auch sanfte
-     * Stick-Bewegungen als "aiming" zaehlen. */
+    HHA_UpdateCachedTarget();
+
     mag = sqrtf( (float)(*mx_raw * *mx_raw) + (float)(*my_raw * *my_raw) );
-    if ( mag >= HHA_AIM_THRESHOLD ) {
-        hha_recentAimFrames = HHA_AIM_ACTIVE_FRAMES;
-    } else if ( hha_recentAimFrames > 0 ) {
-        hha_recentAimFrames--;
-    }
 
-    /* Target Friction nur bei sanften Bewegungen und wenn ein Ziel da ist */
-    if ( HHA_FindTarget( dir, &ang ) >= 0 &&
-         mag > 0.0f && mag < HHA_FRICTION_MAX_MAG ) {
+    if ( hha_cachedTarget >= 0 && mag > 0.0f && mag < HHA_FRICTION_MAX_MAG ) {
         friction = HHA_FRICTION;
     }
 
-    /* S-Curve: sehr nah an linear (HHA_CURVE_EXP ~ 1.05),
-     * damit grosser Input erhalten bleibt. Nur kleine
-     * Bewegungen werden minimal geglaettet. */
     if ( *mx_raw != 0 ) {
         float s = ( *mx_raw < 0 ) ? -1.0f : 1.0f;
         float a = fabsf( (float)*mx_raw );
@@ -344,70 +365,57 @@ static void CL_HandheldInputCurve( void ) {
     }
 }
 
-/* ---- Hook 2: Rotational Aim Magnetism ----------------------
- * Wird in CL_CreateCmd aufgerufen, NACHDEM CL_MouseMove und
- * CL_JoystickMove cl.viewangles aktualisiert haben. Dadurch
- * wird der Sog nicht mehr ueberschrieben.
- * ------------------------------------------------------------ */
-static void CL_HandheldAimMagnetism( void ) {
-    vec3_t bestDir;
-    float  bestAngle;
-    int    target;
+/* ---- Hook 2: Magnetismus + Fire-Assist ------------------- */
+static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
+    vec3_t forward, targetAngles;
+    float  dot, currentAngle, yawDiff, pitchDiff, strength;
+    float  magYaw, magPitch;
+    qboolean firing;
 
     if ( clc.state != CA_ACTIVE )
         return;
-
-    /* Magnet nur, wenn der Spieler innerhalb der letzten Frames
-     * aktiv mit dem Stick gezielt hat. */
-    if ( hha_recentAimFrames <= 0 )
+    if ( !hha_cachedValid || hha_cachedTarget < 0 )
         return;
 
-    target = HHA_FindTarget( bestDir, &bestAngle );
+    /* Aktueller Winkel zwischen Blick und Ziel */
+    AngleVectors( cl.viewangles, forward, NULL, NULL );
+    dot = DotProduct( forward, hha_cachedDir );
+    if ( dot >  1.0f ) dot =  1.0f;
+    if ( dot < -1.0f ) dot = -1.0f;
+    currentAngle = acosf( dot ) * ( 180.0f / HHA_PI );
 
-    /* Sticky-Target-Buchhaltung */
-    if ( target >= 0 ) {
-        hha_lastTargetNum = target;
-        hha_lastTargetAge = 0;
-    } else if ( ++hha_lastTargetAge > HHA_STICKY_FRAMES ) {
-        hha_lastTargetNum = -1;
-    }
-
-    if ( target < 0 )
+    if ( currentAngle > HHA_MAX_ANGLE )
         return;
 
-    {
-        vec3_t targetAngles;
-        float  yawDiff, pitchDiff, strength;
+    /* Fire-Assist: waehrend Schuss staerkerer Sog */
+    firing = ( cmd && ( cmd->buttons & BUTTON_ATTACK ) );
+    magYaw   = firing ? HHA_FIRE_YAW   : HHA_MAGNETISM_YAW;
+    magPitch = firing ? HHA_FIRE_PITCH : HHA_MAGNETISM_PITCH;
 
-        vectoangles( bestDir, targetAngles );
+    vectoangles( hha_cachedDir, targetAngles );
 
-        yawDiff   = targetAngles[YAW]   - cl.viewangles[YAW];
-        pitchDiff = targetAngles[PITCH] - cl.viewangles[PITCH];
+    yawDiff   = targetAngles[YAW]   - cl.viewangles[YAW];
+    pitchDiff = targetAngles[PITCH] - cl.viewangles[PITCH];
 
-        while ( yawDiff   >  180.0f ) yawDiff   -= 360.0f;
-        while ( yawDiff   < -180.0f ) yawDiff   += 360.0f;
-        while ( pitchDiff >  180.0f ) pitchDiff -= 360.0f;
-        while ( pitchDiff < -180.0f ) pitchDiff += 360.0f;
+    while ( yawDiff   >  180.0f ) yawDiff   -= 360.0f;
+    while ( yawDiff   < -180.0f ) yawDiff   += 360.0f;
+    while ( pitchDiff >  180.0f ) pitchDiff -= 360.0f;
+    while ( pitchDiff < -180.0f ) pitchDiff += 360.0f;
 
-        if ( bestAngle <= HHA_FALLOFF_ANGLE ) {
-            strength = 1.0f;
-        } else {
-            strength = 1.0f - ( bestAngle - HHA_FALLOFF_ANGLE ) /
-                              ( HHA_MAX_ANGLE - HHA_FALLOFF_ANGLE );
-            if ( strength < 0.0f ) strength = 0.0f;
-        }
-
-        cl.viewangles[YAW]   += yawDiff   * HHA_MAGNETISM_YAW   * strength;
-        cl.viewangles[PITCH] += pitchDiff * HHA_MAGNETISM_PITCH * strength;
+    if ( currentAngle <= HHA_FALLOFF_ANGLE ) {
+        strength = 1.0f;
+    } else {
+        strength = 1.0f - ( currentAngle - HHA_FALLOFF_ANGLE ) /
+                          ( HHA_MAX_ANGLE - HHA_FALLOFF_ANGLE );
+        if ( strength < 0.0f ) strength = 0.0f;
     }
+
+    cl.viewangles[YAW]   += yawDiff   * magYaw   * strength;
+    cl.viewangles[PITCH] += pitchDiff * magPitch * strength;
 }
 /* ============================================================ */
 """
 
-    # WICHTIG: Die Helper-Funktionen MUESSEN vor CL_MouseMove stehen,
-    # weil CL_MouseMove die Funktion CL_HandheldInputCurve() aufruft
-    # und C keine impliziten Deklarationen von static-Funktionen erlaubt.
-    # CL_MouseMove liegt in cl_input.c VOR CL_CreateCmd.
     mouse_body_pat = re.compile(
         r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{)'
     )
@@ -415,8 +423,6 @@ static void CL_HandheldAimMagnetism( void ) {
         print("[WARN] CL_MouseMove not found - skipping aim assist")
         return False
 
-    # Schritt 1: Helper-Funktionen vor CL_MouseMove einfuegen
-    # Schritt 2: CL_HandheldInputCurve() als erste Zeile im CL_MouseMove-Body
     content = mouse_body_pat.sub(
         lambda m: (helper_code
                    + "\n" + m.group(1)
@@ -424,9 +430,8 @@ static void CL_HandheldAimMagnetism( void ) {
         content, count=1
     )
 
-    # Schritt 3: CL_HandheldAimMagnetism() in CL_CreateCmd einfuegen,
-    # direkt NACH CL_JoystickMove, damit Maus- und Joystick-Pfad ihre
-    # Arbeit abgeschlossen haben.
+    # Magnetismus-Hook wird NACH CL_JoystickMove eingefuegt und erhaelt
+    # den cmd-Zeiger, damit der Fire-Assist BUTTON_ATTACK auslesen kann.
     joy_pat = re.compile(
         r'(\n[ \t]*CL_JoystickMove\s*\(\s*&\s*cmd\s*\)\s*;)'
     )
@@ -435,14 +440,14 @@ static void CL_HandheldAimMagnetism( void ) {
         return False
 
     content = joy_pat.sub(
-        lambda m: m.group(1) + "\n\n\tCL_HandheldAimMagnetism();",
+        lambda m: m.group(1) + "\n\n\tCL_HandheldAimMagnetism( &cmd );",
         content, count=1
     )
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Aim assist injected into {target_file} "
-          f"(helpers before CL_MouseMove, magnetism after CL_JoystickMove)")
+    print(f"[PATCHED] Aim assist v4 injected into {target_file} "
+          f"(LOS + always-on magnetism + fire assist)")
     return True
 # =====================================================================
 
