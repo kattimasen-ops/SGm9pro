@@ -29,7 +29,7 @@ def patch_makefile():
     """Patch the Smokin' Guns Makefile safely without altering execution logic."""
     makefile = "Makefile"
     if not os.path.exists(makefile):
-        print("[WARN] {makefile} not found - skipping")
+        print(f"[WARN] {makefile} not found - skipping")
         return False
 
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
@@ -43,11 +43,18 @@ def patch_makefile():
         )
         print("[PATCHED] Makefile: Corrected BASENAME -> BASEGAME in UI objects")
 
-    # Inject SDL2 & SDL include paths as global overrides
-    sdl_include_line = "override CFLAGS += -I/usr/include/SDL2 -I/usr/include/SDL\n"
-    if "override CFLAGS += -I/usr/include/SDL2" not in content:
-        content = sdl_include_line + content
-        print("[PATCHED] Makefile: added -I/usr/include/SDL2 to global CFLAGS")
+    # WICHTIG: SDL compat header (-I/usr/include/SDL) MUSS vor SDL2 stehen,
+    # damit sdl12-compat fuer sdl_input.c / sdl_snd.c korrekt greift.
+    sdl_include_line = "override CFLAGS += -I/usr/include/SDL -I/usr/include/SDL2\n"
+    if "-I/usr/include/SDL" not in content:
+        if "override CFLAGS += -I/usr/include/SDL2" in content:
+            content = content.replace(
+                "override CFLAGS += -I/usr/include/SDL2",
+                "override CFLAGS += -I/usr/include/SDL -I/usr/include/SDL2"
+            )
+        else:
+            content = sdl_include_line + content
+        print("[PATCHED] Makefile: added -I/usr/include/SDL -I/usr/include/SDL2 to global CFLAGS")
 
     # Hygiene and cleanups
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
@@ -124,7 +131,7 @@ def patch_q_platform():
 
 
 def patch_sdl_headers():
-    """Ensure SDL2 header includes resolve correctly."""
+    """Ensure SDL header includes resolve correctly."""
     if not os.path.isdir("code"):
         return 0
     patched = 0
@@ -135,8 +142,8 @@ def patch_sdl_headers():
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
                 if '#  include "SDL.h"' in content or '#include "SDL.h"' in content:
-                    content = content.replace('#  include "SDL.h"', '#include <SDL2/SDL.h>')
-                    content = content.replace('#include "SDL.h"', '#include <SDL2/SDL.h>')
+                    content = content.replace('#  include "SDL.h"', '#include <SDL.h>')
+                    content = content.replace('#include "SDL.h"', '#include <SDL.h>')
                     with open(path, "w", encoding="utf-8") as f:
                         f.write(content)
                     patched += 1
@@ -202,11 +209,6 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     }
 
     // 2. Zielerkennung im Sichtfeld (Naechste Entitaet ermitteln)
-    // FIX: parseEntities gehoert zu cl (clientActive_t), nicht zu clc
-    // (clientConnection_t) - verifiziert gegen den echten ioquake3-Quellcode
-    // (id-Software/Quake-III-Arena, ioq3 cl_parse.c). Das war der Grund
-    // fuer den Compile-Fehler "clientConnection_t has no member named
-    // parseEntities".
     AngleVectors(cl.viewangles, forward, NULL, NULL);
 
     for (i = 0; i < cl.snap.numEntities; i++) {
