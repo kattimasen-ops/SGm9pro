@@ -18,13 +18,25 @@ jobs:
       - name: ARM64-Multiarch aktivieren
         run: |
           sudo dpkg --add-architecture arm64
+
+          # Host-Quellen AUF AMD64 BESCHRAENKEN
+          # (arm64 gibt es dort nicht - nur auf ports.ubuntu.com)
+          sudo rm -f /etc/apt/sources.list.d/*.list
+          sudo rm -f /etc/apt/sources.list.d/*.sources
+          sudo bash -c 'cat > /etc/apt/sources.list <<EOF
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          EOF'
+
+          # ARM64-Quellen aus focal (GLIBC 2.31) - identisch zum erfolgreichen Run
           sudo bash -c 'cat > /etc/apt/sources.list.d/arm64.list <<EOF
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse
           EOF'
-          sudo sed -i 's|^deb http://archive.ubuntu.com|deb [arch=amd64] http://archive.ubuntu.com|g' /etc/apt/sources.list
-          sudo sed -i 's|^deb http://security.ubuntu.com|deb [arch=amd64] http://security.ubuntu.com|g' /etc/apt/sources.list
+
           sudo apt-get update
 
       - name: Cross-Toolchain und ARM64-Abhaengigkeiten installieren
