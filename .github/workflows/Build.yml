@@ -1,76 +1,59 @@
-name: Create Smokin Guns ARM64
+name: Build Smokin' Guns (aarch64)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-aarch64:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Workflow Repository
+      - name: Repository auschecken
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Clone Official Smokin' Guns Source Code
-        run: |
-          git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git temp_source
-          cp -r temp_source/* .
-          cp -r temp_source/.github . 2>/dev/null || true
-          rm -rf temp_source
-
-      - name: Set up QEMU
+      - name: QEMU für ARM64 Emulation einrichten
         uses: docker/setup-qemu-action@v3
 
-      - name: Cache ccache directory
-        uses: actions/cache@v4
+      - name: Build im ARM64 Docker-Container ausführen
+        uses: addnab/docker-run-action@v3
         with:
-          path: ${{ github.workspace }}/.ccache
-          key: ccache-aarch64-${{ github.sha }}
-          restore-keys: |
-            ccache-aarch64-
-
-      - name: Build inside ARM64 Docker Container
-        timeout-minutes: 120
-        run: |
-          mkdir -p .ccache
-          docker run --rm --privileged --platform linux/arm64 \
-            -v ${{ github.workspace }}:/work \
-            -v ${{ github.workspace }}/.ccache:/root/.ccache \
-            -e CC="ccache gcc" \
-            -e TERM="dumb" \
-            -e PYTHONUNBUFFERED=1 \
-            arm64v8/ubuntu:20.04 bash -c "
+          image: arm64v8/ubuntu:22.04
+          options: -v ${{ github.workspace }}:/work -w /work
+          run: |
             set -e
-            set -o pipefail
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update && apt-get install -y \
-              build-essential python3 python3-pip git \
-              libsdl2-dev libopenal-dev libcurl4-openssl-dev \
-              python3-urllib3 ccache pkg-config cmake libfreetype-dev
+            
+            # Systemaktualisierung & Installation von SDL 1.2 + Abhängigkeiten
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              build-essential \
+              gcc \
+              g++ \
+              make \
+              ccache \
+              python3 \
+              libsdl1.2-dev \
+              libopenal-dev \
+              libcurl4-openssl-dev \
+              libvorbis-dev \
+              libogg-dev \
+              libfreetype6-dev \
+              libpng-dev \
+              zlib1g-dev
 
-            ccache -M 2G
-            git config --global --add safe.directory /work
-            cd /work
-            echo '===== RUNNING PATCH SCRIPT ====='
-            python3 -u .github/scripts/patch_arm64.py
+            # Python Patch-Skript zur Säuberung des Makefiles ausführen
+            python3 patch_build.py
 
-            echo '===== RUNNING MAKE ====='
-            make -j$(nproc) ARCH=aarch64 BUILD_CLIENT=1 BUILD_GAME_SO=1 USE_SDL2=1 2>&1 | tee /work/build-full.log
-          "
+            # Build für aarch64 mit expliziten SDL 1.2 Flags starten
+            make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release
 
-      - name: Upload Full Build Log
-        if: always()
+      - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: build-full-log
-          path: build-full.log
-          retention-days: 30
-
-      - name: Upload Build Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smokinguns-arm64
+          name: smokinguns-aarch64
           path: build/release-linux-aarch64/
-          retention-days: 30
