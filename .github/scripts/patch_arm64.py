@@ -2,9 +2,9 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
-[EXTENDED] Handheld aim assist: S-Curve, Target Friction, Sticky Target,
-           Rotational Aim Magnetism. Injected as a SINGLE call at the top
-           of CL_MouseMove so the upstream if/else flow is never broken.
+[EXTENDED] Handheld aim assist fuer GAMEPAD via GPtk (Maus-Emulation):
+  - S-Curve + Target Friction on cl.mouseDx/cl.mouseDy (CL_MouseMove)
+  - Rotational Aim Magnetism on cl.viewangles (CL_CreateCmd nach Joystick)
 """
 
 import os
@@ -152,25 +152,19 @@ def patch_sdl12_compat_hints():
 
 
 # =====================================================================
-# [EXTENDED] Handheld Aim Assist - single safe injection, no aimbot
+# [EXTENDED] Handheld Aim Assist fuer GPtk-emuliertes Maus-Input
 # =====================================================================
 def patch_aim_assist():
-    """Inject handheld aim assist into code/client/cl_input.c.
+    """Injiziert zwei sauber getrennte Eingriffe in cl_input.c.
 
-    Features (all client-side, no server-side or protocol impact):
-      * S-Curve            - finer control near centre on the analog stick
-      * Target Friction    - slows down small stick movements when on target
-      * Sticky Target      - holds the same target for ~200 ms to prevent
-                             jitter when two enemies are close together
-      * Aim Magnetism      - soft pull toward nearest enemy inside an 8-deg
-                             cone, ramped down toward the cone edge
-      * Active-Aim Gate    - magnetism only runs while the player is actively
-                             moving the stick, so the crosshair never drifts
-                             on its own (this is what separates this from
-                             an aimbot)
+    Weil GPtk den rechten Stick als Maus-Deltas einspeist, arbeitet der
+    Aim-Assist auf cl.mouseDx/cl.mouseDy. Der Magnetismus muss aber NACH
+    der Maus-Verarbeitung angewendet werden, sonst ueberschreibt die
+    Maus-Bewegung die Korrektur.
 
-    Not implemented on purpose:
-      * Snap-to-target, prediction, auto-fire, wall-piercing check.
+    Einhaengepunkte:
+      * CL_HandheldInputCurve()    -> am Anfang von CL_MouseMove
+      * CL_HandheldAimMagnetism()  -> in CL_CreateCmd, nach CL_JoystickMove
     """
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -185,26 +179,29 @@ def patch_aim_assist():
     with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    if "CL_ApplyHandheldAimAssist" in content:
+    if "CL_HandheldInputCurve" in content:
         print(f"[SKIP] Aim assist already present in {target_file}")
         return True
 
     helper_code = r"""
 /* ============================================================
- * [PATCHED] Handheld Aim Assist for ARM64 / RK3326
+ * [PATCHED] Handheld Aim Assist (GPtk Maus-Emulation)
  * ============================================================
- *  S-Curve          - finer control near centre, full speed on flicks
- *  Target Friction  - slows small stick movements when on target
- *  Sticky Target    - keeps last target for a few frames
- *  Aim Magnetism    - soft pull toward nearest enemy in cone
- *  Active-Aim Gate  - magnet only runs while the player is aiming
+ *  Auf einem RK3326-Handheld wird der rechte Stick von GPtk als
+ *  Mausbewegung an die Engine gegeben (cl.mouseDx/cl.mouseDy).
+ *  Darum arbeiten beide Hooks auf dem Maus-Pfad, nicht auf den
+ *  Joystick-Achsen (die von GPtk nie gesetzt werden).
  *
- * Called once per frame from the top of CL_MouseMove. Client-side only.
- * Tune via the HHA_* defines below.
+ *  Features:
+ *    * S-Curve           - subtile Feinkontrolle auf kleinen Deltas
+ *    * Target Friction   - Input-Daempfung nahe am Ziel
+ *    * Aim Magnetism     - sanfter Sog zum naechsten Gegner
+ *    * Active-Aim Gate   - Magnet nur bei aktivem Maus-Input
+ *    * Sticky Target     - verhindert Flackern bei nahen Zielen
  *
- * Recoil Assist intentionally omitted: in the Quake 3 engine positive
- * PITCH pitches the view DOWN, so adding pitch while firing pulls the
- * crosshair down and makes aiming harder, not easier.
+ *  Beide Hooks sind client-seitig und beruehren weder Server noch
+ *  Protokoll. Sie sind so konstruiert, dass die Maus-Verarbeitung
+ *  von CL_MouseMove erhalten bleibt.
  * ============================================================ */
 #include <math.h>
 
@@ -216,30 +213,28 @@ def patch_aim_assist():
 #define EF_DEAD 0x00000001
 #endif
 
-/* --- Tuning knobs ------------------------------------------- */
-#define HHA_PI               3.14159265358979323846f
-#define HHA_MAX_ANGLE        8.0f    /* outer cone half-angle (deg)      */
-#define HHA_FALLOFF_ANGLE    3.0f    /* full magnet strength inside this */
-#define HHA_MAGNETISM_YAW    0.14f   /* horizontal pull per frame        */
-#define HHA_MAGNETISM_PITCH  0.08f   /* vertical pull per frame          */
-#define HHA_FRICTION         0.65f   /* input scale when on target       */
-#define HHA_FRICTION_MAX_MAG 40.0f   /* friction only for inputs below   */
-#define HHA_CURVE_EXP        1.20f   /* >1 = finer near centre           */
-#define HHA_CURVE_REF        64.0f   /* raw units where gain == 1.0      */
-#define HHA_STICKY_FRAMES    12      /* ~200 ms at 60 fps                */
-#define HHA_AIM_ACTIVE_FRAMES 8      /* magnet stays alive this long     */
-#define HHA_AIM_THRESHOLD    3.0f    /* raw units to count as "aiming"   */
-#define HHA_MAX_DIST         4096.0f /* skip enemies beyond this         */
-#define HHA_MIN_DIST         48.0f   /* skip enemies inside melee range  */
+/* --- Tuning ------------------------------------------------- */
+#define HHA_PI                3.14159265358979323846f
+#define HHA_MAX_ANGLE        10.0f    /* aeusserer Magnet-Kegel (Grad)    */
+#define HHA_FALLOFF_ANGLE     4.0f    /* voller Magnet bis zu diesem Winkel */
+#define HHA_MAGNETISM_YAW     0.22f   /* horizontaler Sog pro Frame       */
+#define HHA_MAGNETISM_PITCH   0.12f   /* vertikaler Sog pro Frame         */
+#define HHA_FRICTION          0.80f   /* Input-Skalierung bei Zielnaehe   */
+#define HHA_FRICTION_MAX_MAG 30.0f    /* Friction nur unter diesem Delta  */
+#define HHA_CURVE_EXP         1.05f   /* fast linear - keine Verlangsamung */
+#define HHA_CURVE_REF        32.0f    /* Bezug fuer die Kurve             */
+#define HHA_STICKY_FRAMES    12
+#define HHA_AIM_ACTIVE_FRAMES 12
+#define HHA_AIM_THRESHOLD     0.5f    /* 1 Rohdelta = "aktiv"             */
+#define HHA_MAX_DIST         4096.0f
+#define HHA_MIN_DIST           48.0f
 /* ------------------------------------------------------------ */
 
-/* Persistent per-session state */
-static int hha_lastTargetNum    = -1;
-static int hha_lastTargetAge    = 0;
-static int hha_recentAimFrames  = 0;
+static int hha_lastTargetNum   = -1;
+static int hha_lastTargetAge   = 0;
+static int hha_recentAimFrames = 0;
 
-/* Find the best enemy inside the cone. Returns clientNum or -1.
- * Also returns the unit vector toward that enemy and its angle. */
+/* ---- Zielerkennung (arbeitet auf cl.snap / cl.parseEntities) ---- */
 static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
     int    i, best = -1;
     float  bestAngle = HHA_MAX_ANGLE;
@@ -282,10 +277,9 @@ static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
         if ( dot < -1.0f ) dot = -1.0f;
         angle = acosf( dot ) * ( 180.0f / HHA_PI );
 
-        /* Sticky bonus: previously targeted enemy gets a slightly wider
-         * effective cone, preventing flip-flop when two enemies are close. */
-        if ( ent->number == hha_lastTargetNum && angle < HHA_MAX_ANGLE + 3.0f ) {
-            angle *= 0.75f;
+        /* Sticky-Bonus: vorheriges Ziel bleibt bevorzugt */
+        if ( ent->number == hha_lastTargetNum && angle < HHA_MAX_ANGLE + 4.0f ) {
+            angle *= 0.70f;
         }
 
         if ( angle < bestAngle ) {
@@ -299,59 +293,75 @@ static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
     return best;
 }
 
-static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
-    vec3_t bestDir;
-    float  bestAngle;
-    int    target;
-    int   *mx_raw;
-    int   *my_raw;
-    float  rawMag = 0.0f;
+/* ---- Hook 1: Input-Kurve + Friction ------------------------
+ * Wird am Anfang von CL_MouseMove aufgerufen. Modifiziert die
+ * rohen Maus-Deltas in cl.mouseDx[cl.mouseIndex] / cl.mouseDy
+ * BEVOR CL_MouseMove sie in mx/my kopiert und die Bildwinkel
+ * aktualisiert.
+ * ------------------------------------------------------------ */
+static void CL_HandheldInputCurve( void ) {
+    int   *mx_raw = &cl.mouseDx[cl.mouseIndex];
+    int   *my_raw = &cl.mouseDy[cl.mouseIndex];
+    float  mag;
     float  friction = 1.0f;
+    vec3_t dir;
+    float  ang;
 
-    (void)cmd;
-
-    if ( clc.state != CA_ACTIVE )
-        return;
-
-    /* --- 1. Find target BEFORE touching input ----------------- */
-    target = HHA_FindTarget( bestDir, &bestAngle );
-
-    /* --- 2. Read raw deltas (still unmodified by us) ---------- */
-    mx_raw = &cl.mouseDx[cl.mouseIndex];
-    my_raw = &cl.mouseDy[cl.mouseIndex];
-
-    rawMag = sqrtf( (float)(*mx_raw * *mx_raw) +
-                    (float)(*my_raw * *my_raw) );
-
-    /* Track "player is aiming" so magnet only fires on active input. */
-    if ( rawMag >= HHA_AIM_THRESHOLD ) {
+    /* Aktiv-Aim-Zaehler: kleine Schwelle, damit auch sanfte
+     * Stick-Bewegungen als "aiming" zaehlen. */
+    mag = sqrtf( (float)(*mx_raw * *mx_raw) + (float)(*my_raw * *my_raw) );
+    if ( mag >= HHA_AIM_THRESHOLD ) {
         hha_recentAimFrames = HHA_AIM_ACTIVE_FRAMES;
     } else if ( hha_recentAimFrames > 0 ) {
         hha_recentAimFrames--;
     }
 
-    /* --- 3. Target Friction: only for fine adjustments -------- */
-    if ( target >= 0 && rawMag > 0.0f && rawMag < HHA_FRICTION_MAX_MAG ) {
+    /* Target Friction nur bei sanften Bewegungen und wenn ein Ziel da ist */
+    if ( HHA_FindTarget( dir, &ang ) >= 0 &&
+         mag > 0.0f && mag < HHA_FRICTION_MAX_MAG ) {
         friction = HHA_FRICTION;
     }
 
-    /* --- 4. S-Curve + friction on raw deltas ------------------ */
+    /* S-Curve: sehr nah an linear (HHA_CURVE_EXP ~ 1.05),
+     * damit grosser Input erhalten bleibt. Nur kleine
+     * Bewegungen werden minimal geglaettet. */
     if ( *mx_raw != 0 ) {
         float s = ( *mx_raw < 0 ) ? -1.0f : 1.0f;
         float a = fabsf( (float)*mx_raw );
-        float curved = s * powf( a, HHA_CURVE_EXP ) /
-                           powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
-        *mx_raw = (int)( curved * friction );
+        float curved = powf( a, HHA_CURVE_EXP ) /
+                       powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
+        *mx_raw = (int)( s * curved * friction );
     }
     if ( *my_raw != 0 ) {
         float s = ( *my_raw < 0 ) ? -1.0f : 1.0f;
         float a = fabsf( (float)*my_raw );
-        float curved = s * powf( a, HHA_CURVE_EXP ) /
-                           powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
-        *my_raw = (int)( curved * friction );
+        float curved = powf( a, HHA_CURVE_EXP ) /
+                       powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
+        *my_raw = (int)( s * curved * friction );
     }
+}
 
-    /* --- 5. Update sticky target bookkeeping ------------------ */
+/* ---- Hook 2: Rotational Aim Magnetism ----------------------
+ * Wird in CL_CreateCmd aufgerufen, NACHDEM CL_MouseMove und
+ * CL_JoystickMove cl.viewangles aktualisiert haben. Dadurch
+ * wird der Sog nicht mehr ueberschrieben.
+ * ------------------------------------------------------------ */
+static void CL_HandheldAimMagnetism( void ) {
+    vec3_t bestDir;
+    float  bestAngle;
+    int    target;
+
+    if ( clc.state != CA_ACTIVE )
+        return;
+
+    /* Magnet nur, wenn der Spieler innerhalb der letzten Frames
+     * aktiv mit dem Stick gezielt hat. */
+    if ( hha_recentAimFrames <= 0 )
+        return;
+
+    target = HHA_FindTarget( bestDir, &bestAngle );
+
+    /* Sticky-Target-Buchhaltung */
     if ( target >= 0 ) {
         hha_lastTargetNum = target;
         hha_lastTargetAge = 0;
@@ -359,8 +369,10 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
         hha_lastTargetNum = -1;
     }
 
-    /* --- 6. Magnetism: only while player is actively aiming --- */
-    if ( target >= 0 && hha_recentAimFrames > 0 ) {
+    if ( target < 0 )
+        return;
+
+    {
         vec3_t targetAngles;
         float  yawDiff, pitchDiff, strength;
 
@@ -374,7 +386,6 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
         while ( pitchDiff >  180.0f ) pitchDiff -= 360.0f;
         while ( pitchDiff < -180.0f ) pitchDiff += 360.0f;
 
-        /* Ramp: full strength inside falloff, tapering to zero at edge. */
         if ( bestAngle <= HHA_FALLOFF_ANGLE ) {
             strength = 1.0f;
         } else {
@@ -390,23 +401,51 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
 /* ============================================================ */
 """
 
-    pattern = re.compile(
-        r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{)'
+    # Schritt 1: Helper-Funktionen VOR CL_CreateCmd einfuegen
+    create_pat = re.compile(
+        r'(usercmd_t\s+CL_CreateCmd\s*\(\s*void\s*\)\s*\{)'
     )
-    if not pattern.search(content):
-        print("[WARN] CL_MouseMove signature not found - skipping aim assist")
+    if not create_pat.search(content):
+        print("[WARN] CL_CreateCmd not found - skipping aim assist")
         return False
 
-    content = pattern.sub(
-        lambda m: helper_code
-                  + "\n" + m.group(1)
-                  + "\n\tCL_ApplyHandheldAimAssist( cmd );",
+    content = create_pat.sub(
+        lambda m: helper_code + "\n" + m.group(1),
+        content, count=1
+    )
+
+    # Schritt 2: CL_HandheldInputCurve() am Anfang von CL_MouseMove einfuegen
+    mouse_pat = re.compile(
+        r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{\s*\n)'
+    )
+    if not mouse_pat.search(content):
+        print("[WARN] CL_MouseMove body not found - skipping input curve hook")
+        return False
+
+    content = mouse_pat.sub(
+        lambda m: m.group(1) + "\tCL_HandheldInputCurve();\n",
+        content, count=1
+    )
+
+    # Schritt 3: CL_HandheldAimMagnetism() in CL_CreateCmd einfuegen -
+    # direkt NACH CL_JoystickMove, damit die Maus- und Joystick-Pfade
+    # ihre Arbeit abgeschlossen haben.
+    joy_pat = re.compile(
+        r'(\n[ \t]*CL_JoystickMove\s*\(\s*&\s*cmd\s*\)\s*;)'
+    )
+    if not joy_pat.search(content):
+        print("[WARN] CL_JoystickMove call not found - skipping magnetism hook")
+        return False
+
+    content = joy_pat.sub(
+        lambda m: m.group(1) + "\n\n\tCL_HandheldAimMagnetism();",
         content, count=1
     )
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Aim assist injected into {target_file} (single safe hook)")
+    print(f"[PATCHED] Aim assist injected into {target_file} "
+          f"(input curve + magnetism hooks)")
     return True
 # =====================================================================
 
