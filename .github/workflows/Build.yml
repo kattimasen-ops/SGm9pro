@@ -9,13 +9,9 @@ on:
 
 jobs:
   build-aarch64:
-    # [FIX] Nativer ARM64-Runner statt QEMU-Emulation.
-    # Kein Docker, kein QEMU, keine Plattform-Warnungen.
-    # Verfuegbar fuer oeffentliche Repositories.
     runs-on: ubuntu-24.04-arm
 
     env:
-      # Cortex-A35 Performance-Flags (RK3326 Quad-Core, ARMv8-A 64-bit)
       OPTIMIZE: "-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector -fmerge-all-constants -DNDEBUG"
       LDFLAGS: "-Wl,-O1 -Wl,--as-needed"
 
@@ -47,9 +43,7 @@ jobs:
 
       - name: Patches anwenden
         run: |
-          pwd
-          ls -la
-          python3 patch_arm64.py
+          python3 .github/scripts/patch_arm64.py
 
       - name: Smokin' Guns kompilieren
         run: |
