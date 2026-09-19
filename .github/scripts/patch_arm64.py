@@ -26,7 +26,7 @@ def patch_makefile():
     """Patch the Smokin' Guns Makefile safely without altering execution logic."""
     makefile = "Makefile"
     if not os.path.exists(makefile):
-        print(f"[WARN] {makefile} not found - skipping")
+        print("[WARN] {makefile} not found - skipping")
         return False
 
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
@@ -164,6 +164,10 @@ def patch_aim_assist():
 /* [PATCHED] Handheld Aim Assist, Input Curve & Aim Magnetism for ARM64 */
 #include <math.h>
 
+#ifndef ET_PLAYER
+#define ET_PLAYER 1
+#endif
+
 static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     int i;
     entityState_t *ent;
@@ -174,8 +178,8 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     float bestAngle = 999.0f;
     qboolean targetFound = qfalse;
 
-    int *mx = &cl.mouseDx[cl.executeIndex];
-    int *my = &cl.mouseDy[cl.executeIndex];
+    int *mx = &cl.mouseDx[cl.mouseIndex];
+    int *my = &cl.mouseDy[cl.mouseIndex];
 
     // Schutz: Nur im laufenden Spiel ausfuehren (nicht im Menue/Ladebildschirm)
     if (clc.state != CA_ACTIVE) {
@@ -196,7 +200,7 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     AngleVectors(cl.viewangles, forward, NULL, NULL);
 
     for (i = 0; i < cl.snap.numEntities; i++) {
-        ent = &cl.parseEntities[(cl.snap.parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)];
+        ent = &clc.parseEntities[(cl.snap.parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)];
         if (ent->eType != ET_PLAYER || ent->number == cl.snap.ps.clientNum) {
             continue;
         }
@@ -250,13 +254,9 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
 }
 """
 
-    if "void CL_MouseMove(" in content:
-        content = content.replace("void CL_MouseMove(", c_patch + "\nvoid CL_MouseMove(")
-        content = re.sub(
-            r"(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)",
-            r"\1\n    CL_ApplyHandheldAimAssist(cmd);",
-            content
-        )
+    pattern = re.compile(r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)')
+    if pattern.search(content):
+        content = pattern.sub(c_patch + r'\n\1\n    CL_ApplyHandheldAimAssist(cmd);', content, count=1)
         with open(target_file, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"[PATCHED] {target_file}: Aim Assist safely injected into CL_MouseMove")
