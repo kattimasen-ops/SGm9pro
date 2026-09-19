@@ -2,18 +2,24 @@
 # ============================================================
 # Build-Skript fuer Smokin' Guns auf ARM64 / RK3326
 # Laeuft im Ubuntu 18.04 aarch64 Docker-Container.
+# Alle Performance-Optimierungen aus dem Original sind aktiv.
+# CMake 3.28.3 wird manuell installiert (gl4es braucht
+# check_compiler_flag, das erst ab CMake 3.18 existiert).
 # ============================================================
 set -e
 
-# Arbeitsverzeichnis im Container (wird von docker run -w gesetzt)
 echo "==> pwd: $(pwd)"
 echo "==> Inhalt:"
 ls -la
 
 # --- Umgebungsvariablen -------------------------------------
-export OPTIMIZE="-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 \
--fomit-frame-pointer -fno-math-errno -fno-trapping-math \
--fno-stack-protector -fmerge-all-constants -fcommon -DNDEBUG"
+# Vollstaendiger OPTIMIZE-String mit ALLEN Original-Flags
+export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
+-pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
+-fno-math-errno -fno-trapping-math -fno-semantic-interposition \
+-fno-plt -fno-exceptions -fno-rtti -fno-stack-protector \
+-fno-asynchronous-unwind-tables -fmerge-all-constants \
+-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon"
 export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -31,6 +37,7 @@ echo "==> apt-get install"
 apt-get install -y --no-install-recommends \
   build-essential gcc g++ make cmake git ccache python3 pkg-config \
   autoconf automake libtool \
+  wget \
   libsdl1.2-dev \
   libfreetype6-dev \
   libjpeg-dev \
@@ -57,6 +64,21 @@ apt-get install -y --no-install-recommends \
 
 which sdl-config && sdl-config --version
 
+# ============================================================
+# [FIX] CMake 3.28.3 manuell installieren.
+# Ubuntu 18.04 hat CMake 3.10, das kein check_compiler_flag kennt.
+# gl4es braucht das, sonst bricht CMake mit "Unknown CMake command" ab.
+# ============================================================
+echo "==> Installing CMake 3.28.3 (Ubuntu 18.04's CMake 3.10 is too old)"
+CMAKE_VERSION=3.28.3
+cd /tmp
+wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
+mkdir -p /opt/cmake
+tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+export PATH=/opt/cmake/bin:${PATH}
+echo "==> CMake version:"
+cmake --version
+
 # --- gl4es --------------------------------------------------
 echo "==> Building gl4es"
 cd "${SRC_DIR}"
@@ -71,6 +93,8 @@ cmake .. \
 make -j$(nproc)
 GL4ES_GL=$(find "${SRC_DIR}/gl4es" -name "libGL.so.1" -print -quit)
 GL4ES_EGL=$(find "${SRC_DIR}/gl4es" -name "libEGL.so.1" -print -quit)
+echo "Found libGL:  ${GL4ES_GL}"
+echo "Found libEGL: ${GL4ES_EGL}"
 cp "${GL4ES_GL}"  "${OUT_LIBS}/libGL.so.1"
 cp "${GL4ES_EGL}" "${OUT_LIBS}/libEGL.so.1"
 
@@ -87,6 +111,7 @@ cmake .. \
   -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
 make -j$(nproc) install
 SDL2_LIB=$(find /opt/sdl2 -name "libSDL2-2.0.so.0" -print -quit)
+echo "Found SDL2: ${SDL2_LIB}"
 cp "${SDL2_LIB}" "${OUT_LIBS}/libSDL2-2.0.so.0"
 
 # --- sdl12-compat -------------------------------------------
@@ -103,6 +128,7 @@ cmake .. \
   -DCMAKE_C_FLAGS="${OPTIMIZE} -fvisibility=default"
 make -j$(nproc)
 SDL12_LIB=$(find "${SRC_DIR}/sdl12-compat" -name "libSDL-1.2.so.0" -print -quit)
+echo "Found sdl12-compat: ${SDL12_LIB}"
 cp "${SDL12_LIB}" "${OUT_LIBS}/libSDL-1.2.so.0"
 
 # --- Smokin' Guns -------------------------------------------
@@ -135,10 +161,11 @@ make release -j$(nproc) \
   OPTIMIZE="${OPTIMIZE}" \
   LDFLAGS="${LDFLAGS}"
 
-# --- Bibliotheken neben die Binaerdateien kopieren ----------
 REL_DIR="${SRC_DIR}/SmokinGuns/build/release-linux-aarch64"
 cp "${OUT_LIBS}"/*.so* "${REL_DIR}/"
 echo "=== Final release directory ==="
 ls -la "${REL_DIR}/"
+echo "=== smokinguns subdir ==="
+ls -la "${REL_DIR}/smokinguns/" || true
 
 echo "==> Build erfolgreich."
