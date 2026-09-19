@@ -2,9 +2,9 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
-[EXTENDED] Handheld aim assist fuer GAMEPAD via GPtk (Maus-Emulation):
+[EXTENDED] Handheld aim assist for GAMEPAD via GPtk (Maus-Emulation):
   - S-Curve + Target Friction on cl.mouseDx/cl.mouseDy (CL_MouseMove)
-  - Rotational Aim Magnetism on cl.viewangles (CL_CreateCmd nach Joystick)
+  - Rotational Aim Magnetism on cl.viewangles (CL_CreateCmd after CL_JoystickMove)
 """
 
 import os
@@ -165,6 +165,9 @@ def patch_aim_assist():
     Einhaengepunkte:
       * CL_HandheldInputCurve()    -> am Anfang von CL_MouseMove
       * CL_HandheldAimMagnetism()  -> in CL_CreateCmd, nach CL_JoystickMove
+
+    Wichtig: Die Helper-Funktionen muessen VOR CL_MouseMove stehen,
+    weil C keine impliziten Deklarationen von static-Funktionen erlaubt.
     """
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -401,35 +404,29 @@ static void CL_HandheldAimMagnetism( void ) {
 /* ============================================================ */
 """
 
-    # Schritt 1: Helper-Funktionen VOR CL_CreateCmd einfuegen
-    create_pat = re.compile(
-        r'(usercmd_t\s+CL_CreateCmd\s*\(\s*void\s*\)\s*\{)'
+    # WICHTIG: Die Helper-Funktionen MUESSEN vor CL_MouseMove stehen,
+    # weil CL_MouseMove die Funktion CL_HandheldInputCurve() aufruft
+    # und C keine impliziten Deklarationen von static-Funktionen erlaubt.
+    # CL_MouseMove liegt in cl_input.c VOR CL_CreateCmd.
+    mouse_body_pat = re.compile(
+        r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{)'
     )
-    if not create_pat.search(content):
-        print("[WARN] CL_CreateCmd not found - skipping aim assist")
+    if not mouse_body_pat.search(content):
+        print("[WARN] CL_MouseMove not found - skipping aim assist")
         return False
 
-    content = create_pat.sub(
-        lambda m: helper_code + "\n" + m.group(1),
+    # Schritt 1: Helper-Funktionen vor CL_MouseMove einfuegen
+    # Schritt 2: CL_HandheldInputCurve() als erste Zeile im CL_MouseMove-Body
+    content = mouse_body_pat.sub(
+        lambda m: (helper_code
+                   + "\n" + m.group(1)
+                   + "\n\tCL_HandheldInputCurve();"),
         content, count=1
     )
 
-    # Schritt 2: CL_HandheldInputCurve() am Anfang von CL_MouseMove einfuegen
-    mouse_pat = re.compile(
-        r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{\s*\n)'
-    )
-    if not mouse_pat.search(content):
-        print("[WARN] CL_MouseMove body not found - skipping input curve hook")
-        return False
-
-    content = mouse_pat.sub(
-        lambda m: m.group(1) + "\tCL_HandheldInputCurve();\n",
-        content, count=1
-    )
-
-    # Schritt 3: CL_HandheldAimMagnetism() in CL_CreateCmd einfuegen -
-    # direkt NACH CL_JoystickMove, damit die Maus- und Joystick-Pfade
-    # ihre Arbeit abgeschlossen haben.
+    # Schritt 3: CL_HandheldAimMagnetism() in CL_CreateCmd einfuegen,
+    # direkt NACH CL_JoystickMove, damit Maus- und Joystick-Pfad ihre
+    # Arbeit abgeschlossen haben.
     joy_pat = re.compile(
         r'(\n[ \t]*CL_JoystickMove\s*\(\s*&\s*cmd\s*\)\s*;)'
     )
@@ -445,7 +442,7 @@ static void CL_HandheldAimMagnetism( void ) {
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"[PATCHED] Aim assist injected into {target_file} "
-          f"(input curve + magnetism hooks)")
+          f"(helpers before CL_MouseMove, magnetism after CL_JoystickMove)")
     return True
 # =====================================================================
 
