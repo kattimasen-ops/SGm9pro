@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     env:
-      OPTIMIZE: "-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector -fmerge-all-constants -DNDEBUG"
+      # Cortex-A35 Performance-Flags + -fcommon (GCC 10+ Default-Fix fuer ioquake3)
+      OPTIMIZE: "-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector -fmerge-all-constants -fcommon -DNDEBUG"
       LDFLAGS: "-Wl,-O1 -Wl,--as-needed"
       OUT_LIBS: "${{ github.workspace }}/out/libs.aarch64"
       SRC_DIR: "${{ github.workspace }}/build-work"
@@ -72,7 +73,6 @@ jobs:
             -DDEFAULT_ES=2 \
             -DSTATICLIB=OFF
           make -j$(nproc)
-          # gl4es schreibt die .so-Dateien nach ../lib/, nicht nach build/lib/
           GL4ES_GL=$(find "${SRC_DIR}/gl4es" -name "libGL.so.1" -print -quit)
           GL4ES_EGL=$(find "${SRC_DIR}/gl4es" -name "libEGL.so.1" -print -quit)
           echo "Found libGL:  ${GL4ES_GL}"
