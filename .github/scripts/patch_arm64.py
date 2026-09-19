@@ -2,12 +2,12 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
-[EXTENDED] Handheld aim assist v4 (GPtk Maus-Emulation):
-  - S-Curve + Target Friction on cl.mouseDx/cl.mouseDy (CL_MouseMove)
+[EXTENDED] Handheld aim assist v4 mit Menü-Toggle:
+  - S-Curve + Target Friction on cl.mouseDx/cl.mouseDy
   - Rotational Aim Magnetism + Fire-Assist on cl.viewangles
-    (CL_CreateCmd, after CL_JoystickMove)
-  - Line-of-sight check via CM_BoxTrace -> no aim through walls
-  - Stronger magnetism, wider cone, extra pull while firing
+  - Line-of-Sight via CM_BoxTrace (SG-Signatur mit 8 Parametern)
+  - Runtime toggle via cvar cg_handheldAimAssist
+  - Menüpunkt in Settings -> Game Options -> Performance
 """
 
 import os
@@ -155,23 +155,109 @@ def patch_sdl12_compat_hints():
 
 
 # =====================================================================
-# [EXTENDED] Handheld Aim Assist v4 - staerker + Fire-Assist + LOS
+# Client-Cvar-Registrierung in cl_main.c
+# =====================================================================
+def patch_client_cvar():
+    """Registriert cg_handheldAimAssist in CL_Init() von cl_main.c."""
+    path = os.path.join("code", "client", "cl_main.c")
+    if not os.path.exists(path):
+        print("[WARN] cl_main.c not found - skipping client cvar registration")
+        return False
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    if 'cg_handheldAimAssist' in content:
+        print(f"[SKIP] Client cvar already registered in {path}")
+        return True
+
+    anchor = 'j_up_axis =      Cvar_Get ("j_up_axis",      "2", CVAR_ARCHIVE);'
+    if anchor not in content:
+        print("[WARN] cl_main.c anchor not found - skipping client cvar")
+        return False
+
+    insertion = (
+        anchor + "\n"
+        "\t/* [PATCHED] Handheld Aim Assist toggle */\n"
+        "\tCvar_Get (\"cg_handheldAimAssist\", \"1\", CVAR_ARCHIVE);"
+    )
+    content = content.replace(anchor, insertion, 1)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"[PATCHED] {path}: cg_handheldAimAssist registered in CL_Init()")
+    return True
+
+
+# =====================================================================
+# UI-Cvar-Registrierung in ui_local.h + ui_main.c
+# =====================================================================
+def patch_ui_cvar():
+    """Registriert ui_handheldAimAssist in der UI-VM."""
+    # --- ui_local.h ---
+    ui_local_path = None
+    for root, _dirs, files in os.walk("code"):
+        if "ui_local.h" in files:
+            ui_local_path = os.path.join(root, "ui_local.h")
+            break
+
+    if ui_local_path:
+        with open(ui_local_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        if "ui_handheldAimAssist" not in content:
+            anchor = "extern vmCvar_t\tui_brassTime;"
+            if anchor in content:
+                content = content.replace(
+                    anchor,
+                    "extern vmCvar_t\tui_handheldAimAssist;\n" + anchor,
+                    1
+                )
+                with open(ui_local_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"[PATCHED] {ui_local_path}: extern ui_handheldAimAssist added")
+            else:
+                print("[WARN] ui_local.h anchor not found")
+
+    # --- ui_main.c ---
+    ui_main_path = None
+    for root, _dirs, files in os.walk("code"):
+        if "ui_main.c" in files:
+            ui_main_path = os.path.join(root, "ui_main.c")
+            break
+
+    if not ui_main_path:
+        print("[WARN] ui_main.c not found - skipping ui cvar registration")
+        return False
+
+    with open(ui_main_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    if "ui_handheldAimAssist;" not in content:
+        anchor = "vmCvar_t\tui_brassTime;"
+        if anchor in content:
+            content = content.replace(
+                anchor,
+                "vmCvar_t\tui_handheldAimAssist;\n" + anchor,
+                1
+            )
+
+    if '"cg_handheldAimAssist"' not in content:
+        anchor = '\t{ &ui_brassTime, "cg_brassTime", "2500", CVAR_ARCHIVE },'
+        if anchor in content:
+            entry = '\n\t{ &ui_handheldAimAssist, "cg_handheldAimAssist", "1", CVAR_ARCHIVE },'
+            content = content.replace(anchor, anchor + entry, 1)
+
+    with open(ui_main_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"[PATCHED] {ui_main_path}: ui_handheldAimAssist cvar registered")
+    return True
+
+
+# =====================================================================
+# Handheld Aim Assist v4 mit Cvar-Abfrage
 # =====================================================================
 def patch_aim_assist():
-    """Injiziert zwei Hooks plus Zielsuchfunktion mit LOS-Check.
-
-    Version 4:
-      * Staerkerer Grund-Magnetismus (0.24 / 0.15)
-      * Groesserer Kegel (15 Grad)
-      * Fire-Assist waehrend BUTTON_ATTACK
-      * Line-of-Sight-Check via CM_BoxTrace
-      * Always-on Magnetismus (kein Active-Aim-Gate)
-
-    Wichtig: CM_BoxTrace hat in Smokin' Guns 8 Parameter (inkl.
-    'int capsule' am Ende). Der Aufruf uebergibt 0 als capsule,
-    um einen reinen Punkt-Trace (Box-Trace) ohne Kapsel-Form
-    auszufuehren.
-    """
+    """Injiziert die Aim-Assist-Hooks in cl_input.c (v4 mit Cvar)."""
     target_file = None
     for root, _dirs, files in os.walk("code"):
         if "cl_input.c" in files:
@@ -191,20 +277,10 @@ def patch_aim_assist():
 
     helper_code = r"""
 /* ============================================================
- * [PATCHED] Handheld Aim Assist v4
+ * [PATCHED] Handheld Aim Assist v4 + Menue-Toggle
  * ============================================================
- *  Auf einem RK3326-Handheld wird der rechte Stick von GPtk als
- *  Mausbewegung an die Engine gegeben (cl.mouseDx/cl.mouseDy).
- *
- *  Version 4:
- *    - Staerkerer Grund-Magnetismus
- *    - Groesserer Kegel (15 Grad)
- *    - Fire-Assist: extra Sog waehrend BUTTON_ATTACK
- *    - Line-of-Sight-Check via CM_BoxTrace (8 Parameter in SG)
- *    - Always-on Magnetismus (kein Active-Aim-Gate)
- *
- *  Bewusst KEIN Snap-to-Target: das Crosshair wird sanft gezogen,
- *  auch im Fire-Assist-Fenster.
+ *  Wird ueber cvar cg_handheldAimAssist gesteuert.
+ *  Bei "0" tun beide Hooks nichts.
  * ============================================================ */
 #include <math.h>
 
@@ -216,38 +292,34 @@ def patch_aim_assist():
 #define EF_DEAD 0x00000001
 #endif
 
-/* --- Tuning ------------------------------------------------- */
 #define HHA_PI                3.14159265358979323846f
-#define HHA_MAX_ANGLE        15.0f    /* aeusserer Magnet-Kegel (Grad)    */
-#define HHA_FALLOFF_ANGLE     7.0f    /* voller Magnet bis zu diesem Winkel */
-#define HHA_MAGNETISM_YAW     0.24f   /* normaler horizontaler Sog        */
-#define HHA_MAGNETISM_PITCH   0.15f   /* normaler vertikaler Sog          */
-#define HHA_FIRE_YAW          0.45f   /* Sog waehrend Schuss (horizontal) */
-#define HHA_FIRE_PITCH        0.28f   /* Sog waehrend Schuss (vertikal)   */
-#define HHA_FRICTION          0.75f   /* Input-Daempfung bei Zielnaehe    */
-#define HHA_FRICTION_MAX_MAG 40.0f    /* Friction nur unter diesem Delta  */
-#define HHA_CURVE_EXP         1.05f   /* fast linear                      */
+#define HHA_MAX_ANGLE        15.0f
+#define HHA_FALLOFF_ANGLE     7.0f
+#define HHA_MAGNETISM_YAW     0.24f
+#define HHA_MAGNETISM_PITCH   0.15f
+#define HHA_FIRE_YAW          0.45f
+#define HHA_FIRE_PITCH        0.28f
+#define HHA_FRICTION          0.75f
+#define HHA_FRICTION_MAX_MAG 40.0f
+#define HHA_CURVE_EXP         1.05f
 #define HHA_CURVE_REF        32.0f
 #define HHA_STICKY_FRAMES    10
 #define HHA_MAX_DIST         4096.0f
 #define HHA_MIN_DIST           48.0f
-#define HHA_CHEST_HEIGHT     32.0f    /* Zielpunkt am Gegner-Torso        */
-#define HHA_LOS_LENGTH     32768.0f
-/* ------------------------------------------------------------ */
+#define HHA_CHEST_HEIGHT     32.0f
 
 static int hha_lastTargetNum = -1;
 static int hha_lastTargetAge = 0;
 
-/* Zwischenspeicher: pro Frame einmal bestimmen, in beiden Hooks nutzen */
 static int      hha_cachedTarget   = -1;
 static float    hha_cachedAngle    = 999.0f;
 static vec3_t   hha_cachedDir      = { 0, 0, 0 };
 static qboolean hha_cachedValid    = qfalse;
 
-/* ---- Sichtlinien-Check zwischen Auge und Ziel-Torso --------
- * CM_BoxTrace hat in Smokin' Guns 8 Parameter (letzter: capsule).
- * capsule = 0 -> reiner Punkt/Box-Trace (kein Kapsel-Volumen).
- * ------------------------------------------------------------ */
+static qboolean HHA_IsEnabled( void ) {
+    return ( Cvar_VariableIntegerValue("cg_handheldAimAssist") != 0 );
+}
+
 static qboolean HHA_HasLineOfSight( const vec3_t fromFeet, const vec3_t toFeet ) {
     trace_t tr;
     vec3_t  eye, chest;
@@ -260,13 +332,11 @@ static qboolean HHA_HasLineOfSight( const vec3_t fromFeet, const vec3_t toFeet )
     chest[1] = toFeet[1];
     chest[2] = toFeet[2] + HHA_CHEST_HEIGHT;
 
-    /* SMOKING GUNS SIGNATUR: 8 Parameter (mit 'int capsule' am Ende) */
     CM_BoxTrace( &tr, eye, chest, NULL, NULL, 0, CONTENTS_SOLID, 0 );
 
     return ( tr.fraction >= 0.999f );
 }
 
-/* ---- Zielerkennung mit LOS ------------------------------- */
 static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
     int    i, best = -1;
     float  bestAngle = HHA_MAX_ANGLE;
@@ -309,7 +379,6 @@ static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
         if ( dot < -1.0f ) dot = -1.0f;
         angle = acosf( dot ) * ( 180.0f / HHA_PI );
 
-        /* Sticky-Bonus: vorheriges Ziel bleibt bevorzugt */
         if ( ent->number == hha_lastTargetNum && angle < HHA_MAX_ANGLE + 5.0f ) {
             angle *= 0.65f;
         }
@@ -328,7 +397,6 @@ static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
     return best;
 }
 
-/* ---- Ziel pro Frame einmal bestimmen ---------------------- */
 static void HHA_UpdateCachedTarget( void ) {
     hha_cachedTarget = HHA_FindTarget( hha_cachedDir, &hha_cachedAngle );
     hha_cachedValid  = qtrue;
@@ -341,14 +409,20 @@ static void HHA_UpdateCachedTarget( void ) {
     }
 }
 
-/* ---- Hook 1: Input-Kurve + Friction ----------------------- */
 static void CL_HandheldInputCurve( void ) {
-    int   *mx_raw = &cl.mouseDx[cl.mouseIndex];
-    int   *my_raw = &cl.mouseDy[cl.mouseIndex];
+    int   *mx_raw;
+    int   *my_raw;
     float  mag;
     float  friction = 1.0f;
 
+    if ( !HHA_IsEnabled() ) {
+        return;
+    }
+
     HHA_UpdateCachedTarget();
+
+    mx_raw = &cl.mouseDx[cl.mouseIndex];
+    my_raw = &cl.mouseDy[cl.mouseIndex];
 
     mag = sqrtf( (float)(*mx_raw * *mx_raw) + (float)(*my_raw * *my_raw) );
 
@@ -372,12 +446,15 @@ static void CL_HandheldInputCurve( void ) {
     }
 }
 
-/* ---- Hook 2: Magnetismus + Fire-Assist ------------------- */
 static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
     vec3_t forward, targetAngles;
     float  dot, currentAngle, yawDiff, pitchDiff, strength;
     float  magYaw, magPitch;
     qboolean firing;
+
+    if ( !HHA_IsEnabled() ) {
+        return;
+    }
 
     if ( clc.state != CA_ACTIVE )
         return;
@@ -393,7 +470,6 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
     if ( currentAngle > HHA_MAX_ANGLE )
         return;
 
-    /* Fire-Assist: waehrend Schuss staerkerer Sog */
     firing = ( cmd && ( cmd->buttons & BUTTON_ATTACK ) );
     magYaw   = firing ? HHA_FIRE_YAW   : HHA_MAGNETISM_YAW;
     magPitch = firing ? HHA_FIRE_PITCH : HHA_MAGNETISM_PITCH;
@@ -436,7 +512,6 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
         content, count=1
     )
 
-    # Magnetismus NACH CL_JoystickMove in CL_CreateCmd
     joy_pat = re.compile(
         r'(\n[ \t]*CL_JoystickMove\s*\(\s*&\s*cmd\s*\)\s*;)'
     )
@@ -451,38 +526,117 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Aim assist v4 injected into {target_file} "
-          f"(LOS + always-on magnetism + fire assist)")
+    print(f"[PATCHED] Aim assist v4 mit Cvar in {target_file}")
     return True
+
+
 # =====================================================================
+# Menu-Override als lose Datei ins Artefakt schreiben
+# =====================================================================
+def write_menu_override():
+    """Schreibt die modifizierte settings_options.menu ins Artefakt."""
+    if not os.path.exists("Makefile"):
+        return False
 
+    rel_dir = os.path.join("build", "release-linux-aarch64")
+    menu_dir = os.path.join(rel_dir, "smokinguns", "ui")
+    os.makedirs(menu_dir, exist_ok=True)
 
-def main():
-    is_smokinguns = os.path.exists("Makefile")
-    is_sdl12_compat = os.path.exists(os.path.join("src", "SDL12_compat.c"))
+    menu_file = os.path.join(menu_dir, "settings_options.menu")
 
-    if not is_smokinguns and not is_sdl12_compat:
-        print("[ERROR] Not in SmokinGuns or sdl12-compat source tree.")
-        sys.exit(1)
+    content = r"""#include "ui/menudef.h"
+#define ROW1 80
+#define ROW2 330
+#define ROW3 200
 
-    applied = 0
+{
+\\ SETUP MENU \\
 
-    if is_smokinguns:
-        print("==> Patching SmokinGuns")
-        diagnostic_dump()
-        if patch_makefile():
-            applied += 1
-        patch_q_platform()
-        patch_aim_assist()
+menuDef {
+    	name "options_menu"
+    	visible 0
+    	fullscreen 0
+	rect 0 50 640 371
+    	focusColor 1 .75 0 1
+    	style 1
+    	border 1
+	onEsc { close options_menu ; close setup_menu ; open main }
 
-    if is_sdl12_compat:
-        print("==> Patching sdl12-compat")
-        if patch_sdl12_compat_hints():
-            applied += 1
+itemDef {
+	name window
+	group grpControlbutton
+	rect 2 2 632 371	
+	style WINDOW_STYLE_FILLED
+	border 1
+	bordercolor .5 .5 .5 .5
+	forecolor 1 1 1 1
+	backcolor 0 0 0 .5
+	visible 1
+	decoration
+}
 
-    print(f"[DONE] {applied} patch group(s) applied.")
-    sys.exit(0)
+	itemDef {
+      	name other			
+      	style 1
+	text "Game"
+	rect 80 35 128 20
+      	textalign ITEM_ALIGN_CENTER
+      	textalignx 64 
+      	textaligny 20
+	textscale .3
+      	forecolor 1 .75 0 1
+      	visible 1
+	decoration
+    	}
 
+	itemDef {
+		name options
+		group grpOptions
+		text "Crosshair:"
+		rect 208 55 18 18
+		ownerdraw UI_CROSSHAIR
+		textalign ITEM_ALIGN_RIGHT
+		textalignx 0
+		textaligny 20
+		textscale .28
+		forecolor 1 1 1 1
+		visible 1
+		}
+	itemDef {
+      		name options
+		group grpOptions
+      		type ITEM_TYPE_YESNO
+		text "Identify Target:"
+		cvar "cg_drawCrosshairNames"
+		rect ROW1 75 192 18
+      		textalign ITEM_ALIGN_RIGHT
+      		textalignx 128
+      		textaligny 20
+		textscale .28
+      		forecolor 1 1 1 1
+      		visible 1 
+    		}
 
-if __name__ == "__main__":
-    main()
+	itemDef {
+      		name options
+		group grpOptions
+      		type ITEM_TYPE_YESNO
+		text "Auto Download:"
+		cvar "cl_allowDownload"
+		rect ROW1 95 192 18
+      		textalign ITEM_ALIGN_RIGHT
+      		textalignx 128
+      		textaligny 20
+		textscale .28
+      		forecolor 1 1 1 1
+      		visible 1 
+    		}
+	itemDef {
+      		name options
+		group grpOptions
+      		type ITEM_TYPE_YESNO
+		text "Show FPS:"
+		cvar "cg_drawfps"
+		rect ROW1 115 192 18
+      		textalign ITEM_ALIGN_RIGHT
+      		textalig
