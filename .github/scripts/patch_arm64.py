@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
-
-Can be invoked from:
-  - the SmokinGuns source root (patches Makefile + q_platform.h + cl_input.c + SDL headers)
-  - the sdl12-compat source root (patches SDL_HINT_* fallbacks)
+Includes S-Curve, Target Friction, Recoil Assist, and Rotational Aim Magnetism.
 """
 
 import os
@@ -145,7 +142,7 @@ def patch_sdl_headers():
 
 
 def patch_aim_assist():
-    """Inject Target Friction, S-Curve, and Recoil Assist safely using delta pointers into CL_MouseMove in code/client/cl_input.c."""
+    """Inject Target Friction, S-Curve, Recoil Assist, and Rotational Aim Magnetism into code/client/cl_input.c."""
     target_file = None
     for root, _dirs, files in os.walk("code"):
         if "cl_input.c" in files:
@@ -164,17 +161,21 @@ def patch_aim_assist():
         return True
 
     c_patch = """
-/* [PATCHED] Handheld Aim Assist & Input Curve for ARM64 */
+/* [PATCHED] Handheld Aim Assist, Input Curve & Aim Magnetism for ARM64 */
 #include <math.h>
 
-static void CL_ApplyHandheldAimAssist(int *mx, int *my, usercmd_t *cmd) {
+static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     int i;
     entityState_t *ent;
-    vec3_t dir, forward;
+    vec3_t dir, forward, bestTargetDir;
     float dot, angleDelta;
     float frictionFactor = 0.5f;
-    float maxAngle = 4.0f;
+    float maxAngle = 6.0f; // Aktivierungsbereich (Grad)
+    float bestAngle = 999.0f;
     qboolean targetFound = qfalse;
+
+    int *mx = &cl.mouseDx[cl.executeIndex];
+    int *my = &cl.mouseDy[cl.executeIndex];
 
     // Schutz: Nur im laufenden Spiel ausfuehren (nicht im Menue/Ladebildschirm)
     if (clc.state != CA_ACTIVE) {
@@ -191,7 +192,7 @@ static void CL_ApplyHandheldAimAssist(int *mx, int *my, usercmd_t *cmd) {
         *my = (int)(signY * powf(fabsf((float)*my), 1.8f) * 0.065f);
     }
 
-    // 2. Target Friction (Verlangsamung bei Zielkontakt)
+    // 2. Zielerkennung im Sichtfeld (Naechste Entitaet ermitteln)
     AngleVectors(cl.viewangles, forward, NULL, NULL);
 
     for (i = 0; i < cl.snap.numEntities; i++) {
@@ -209,18 +210,40 @@ static void CL_ApplyHandheldAimAssist(int *mx, int *my, usercmd_t *cmd) {
 
         angleDelta = acosf(dot) * (180.0f / 3.14159265358979323846f);
 
-        if (angleDelta < maxAngle) {
+        if (angleDelta < maxAngle && angleDelta < bestAngle) {
+            bestAngle = angleDelta;
+            VectorCopy(dir, bestTargetDir);
             targetFound = qtrue;
-            break;
         }
     }
 
     if (targetFound) {
+        // 3. Target Friction (Verlangsamung der Stick-Empfindlichkeit)
         if (mx) *mx = (int)(*mx * frictionFactor);
         if (my) *my = (int)(*my * frictionFactor);
+
+        // 4. Rotational Aim Magnetism (Maus/Viewangles folgen automatisch dem Spieler)
+        if ((mx && *mx != 0) || (my && *my != 0)) {
+            vec3_t targetAngles;
+            float yawDiff, pitchDiff;
+            float magnetismStrength = 0.12f; // 12% sanftes Mitziehen pro Frame
+
+            vectoangles(bestTargetDir, targetAngles);
+
+            yawDiff = targetAngles[YAW] - cl.viewangles[YAW];
+            pitchDiff = targetAngles[PITCH] - cl.viewangles[PITCH];
+
+            while (yawDiff > 180.0f) yawDiff -= 360.0f;
+            while (yawDiff < -180.0f) yawDiff += 360.0f;
+            while (pitchDiff > 180.0f) pitchDiff -= 360.0f;
+            while (pitchDiff < -180.0f) pitchDiff += 360.0f;
+
+            cl.viewangles[YAW] += yawDiff * magnetismStrength;
+            cl.viewangles[PITCH] += pitchDiff * magnetismStrength;
+        }
     }
 
-    // 3. Rueckstoss-Daempfung bei Dauerfeuer
+    // 5. Rueckstoss-Daempfung bei Dauerfeuer
     if (cmd && (cmd->buttons & BUTTON_ATTACK)) {
         cl.viewangles[PITCH] += 0.35f;
     }
@@ -229,25 +252,11 @@ static void CL_ApplyHandheldAimAssist(int *mx, int *my, usercmd_t *cmd) {
 
     if "void CL_MouseMove(" in content:
         content = content.replace("void CL_MouseMove(", c_patch + "\nvoid CL_MouseMove(")
-
-        if "cl.mouseDy[cl.executeIndex] = 0;" in content:
-            content = content.replace(
-                "cl.mouseDy[cl.executeIndex] = 0;",
-                "cl.mouseDy[cl.executeIndex] = 0;\n    CL_ApplyHandheldAimAssist(&mx, &my, cmd);"
-            )
-        elif "CL_GetMouseDelta" in content:
-            content = re.sub(
-                r"(CL_GetMouseDelta\s*\([^;]+\);)",
-                r"\1\n    CL_ApplyHandheldAimAssist(&mx, &my, cmd);",
-                content
-            )
-        else:
-            content = re.sub(
-                r"(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)",
-                r"\1\n    CL_ApplyHandheldAimAssist(&mx, &my, cmd);",
-                content
-            )
-
+        content = re.sub(
+            r"(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)",
+            r"\1\n    CL_ApplyHandheldAimAssist(cmd);",
+            content
+        )
         with open(target_file, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"[PATCHED] {target_file}: Aim Assist safely injected into CL_MouseMove")
