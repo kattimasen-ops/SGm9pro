@@ -17,18 +17,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: QEMU für ARM64 Emulation einrichten
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build im ARM64 Docker-Container ausführen
-        uses: addnab/docker-run-action@v3
+      - name: Build in ARM64-Umgebung ausführen
+        uses: uraimo/run-on-arch-action@v2
         with:
-          image: arm64v8/ubuntu:22.04
-          options: -v ${{ github.workspace }}:/work -w /work
-          run: |
-            set -e
-            
-            # Systemaktualisierung & Installation von SDL 1.2 + Abhängigkeiten
+          arch: aarch64
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          
+          # Paketinstallation vor dem eigentlichen Run
+          setup: |
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               build-essential \
@@ -46,10 +43,9 @@ jobs:
               libpng-dev \
               zlib1g-dev
 
-            # Python Patch-Skript zur Säuberung des Makefiles ausführen
+          # Eigentliche Build-Schritte
+          run: |
             python3 patch_build.py
-
-            # Build für aarch64 mit expliziten SDL 1.2 Flags starten
             make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release
 
       - name: Build-Artefakte hochladen
