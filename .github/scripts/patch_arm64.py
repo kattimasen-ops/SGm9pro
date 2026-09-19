@@ -2,6 +2,9 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 Includes S-Curve, Target Friction, Recoil Assist, and Rotational Aim Magnetism.
+
+Fuer Bot-/Solo-Matches gedacht (Gamepad-Ausgleich auf einem Handheld ohne
+Maus/Tastatur) - siehe Projektnotiz.
 """
 
 import os
@@ -57,8 +60,8 @@ def patch_makefile():
 
     # Remove toxic x86 architecture flags that trip up ARM GCC
     toxic_flags = [
-        "-m32", "-m64", 
-        "-march=native", "march=native", 
+        "-m32", "-m64",
+        "-march=native", "march=native",
         "-msse", "-msse2", "-msse3", "-mfpmath=sse"
     ]
     for flag in toxic_flags:
@@ -142,7 +145,9 @@ def patch_sdl_headers():
 
 
 def patch_aim_assist():
-    """Inject Target Friction, S-Curve, Recoil Assist, and Rotational Aim Magnetism into code/client/cl_input.c."""
+    """Inject Target Friction, S-Curve, Recoil Assist, and Rotational Aim
+    Magnetism into code/client/cl_input.c (fuer Gamepad-Ausgleich in
+    Solo-/Bot-Matches auf einem Handheld ohne Maus/Tastatur)."""
     target_file = None
     for root, _dirs, files in os.walk("code"):
         if "cl_input.c" in files:
@@ -197,10 +202,15 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     }
 
     // 2. Zielerkennung im Sichtfeld (Naechste Entitaet ermitteln)
+    // FIX: parseEntities gehoert zu cl (clientActive_t), nicht zu clc
+    // (clientConnection_t) - verifiziert gegen den echten ioquake3-Quellcode
+    // (id-Software/Quake-III-Arena, ioq3 cl_parse.c). Das war der Grund
+    // fuer den Compile-Fehler "clientConnection_t has no member named
+    // parseEntities".
     AngleVectors(cl.viewangles, forward, NULL, NULL);
 
     for (i = 0; i < cl.snap.numEntities; i++) {
-        ent = &clc.parseEntities[(cl.snap.parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)];
+        ent = &cl.parseEntities[(cl.snap.parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)];
         if (ent->eType != ET_PLAYER || ent->number == cl.snap.ps.clientNum) {
             continue;
         }
