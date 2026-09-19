@@ -1,16 +1,13 @@
 #!/bin/bash
 # ============================================================
-# Build-Skript fuer Smokin' Guns auf ARM64 / RK3326
-# Basiert auf dem funktionierenden Original-Build.
-# Laeuft im Ubuntu 20.04 aarch64 Container (GCC 9.4.0).
+# Cross-Compile Smokin' Guns fuer ARM64 / RK3326 auf x86_64.
+# Kein QEMU, kein Docker. Nativ auf dem GitHub-Runner.
 # ============================================================
 set -e
 
-echo "==> pwd: $(pwd)"
-echo "==> Inhalt:"
-ls -la
+echo "==> Host architecture:"
+uname -m
 
-# --- Umgebungsvariablen (identisch zum funktionierenden Build) ---
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
 -fno-math-errno -fno-trapping-math -fno-semantic-interposition \
@@ -18,67 +15,43 @@ export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -fno-asynchronous-unwind-tables -fmerge-all-constants \
 -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon"
 export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
-export DEBIAN_FRONTEND=noninteractive
 
-export OUT_LIBS="/work/out/libs.aarch64"
 export SRC_DIR="/work/build-work"
+export OUT_LIBS="/work/out/libs.aarch64"
 export PATCH_SCRIPT="/work/.github/scripts/patch_arm64.py"
+export TOOLCHAIN="/work/.github/scripts/aarch64-toolchain.cmake"
+export CC="aarch64-linux-gnu-gcc"
+export CXX="aarch64-linux-gnu-g++"
 
-mkdir -p "${OUT_LIBS}" "${SRC_DIR}"
+# pkg-config muss ARM64-Pfade durchsuchen
+export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
+export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+unset PKG_CONFIG_SYSROOT_DIR
 
-# --- Systemabhaengigkeiten ----------------------------------
-echo "==> apt-get update"
-apt-get update
+mkdir -p "${SRC_DIR}" "${OUT_LIBS}"
 
-echo "==> apt-get install"
-apt-get install -y --no-install-recommends \
-  build-essential gcc g++ make cmake git ccache python3 pkg-config \
-  autoconf automake libtool \
-  wget \
-  libsdl1.2-dev \
-  libfreetype6-dev \
-  libjpeg-dev \
-  libpng-dev \
-  zlib1g-dev \
-  libogg-dev \
-  libvorbis-dev \
-  libopus-dev \
-  libopusfile-dev \
-  libcurl4-openssl-dev \
-  libopenal-dev \
-  libspeex-dev \
-  libgbm-dev \
-  libegl1-mesa-dev \
-  libgles2-mesa-dev \
-  libdrm-dev \
-  libx11-dev \
-  libxext-dev \
-  libgl1-mesa-dev \
-  libglu1-mesa-dev \
-  libudev-dev \
-  libasound2-dev \
-  libpulse-dev
-
-which sdl-config && sdl-config --version
-
-# --- CMake 3.28.3 manuell installieren ----------------------
-# Ubuntu 20.04 hat CMake 3.16, das kein check_compiler_flag kennt.
+# ------------------------------------------------------------
+# CMake 3.28.3 (Ubuntu 20.04 hat 3.16 - zu alt fuer gl4es)
+# ------------------------------------------------------------
 echo "==> Installing CMake 3.28.3"
-CMAKE_VERSION=3.28.3
-cd /tmp
-wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-aarch64.tar.gz" -O /tmp/cmake.tar.gz
-mkdir -p /opt/cmake
-tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+if [ ! -x /opt/cmake/bin/cmake ]; then
+    wget -q "https://cmake.org/files/v3.28/cmake-3.28.3-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz
+    mkdir -p /opt/cmake
+    tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+fi
 export PATH=/opt/cmake/bin:${PATH}
 cmake --version
 
-# --- gl4es --------------------------------------------------
-echo "==> Building gl4es"
+# ------------------------------------------------------------
+# gl4es
+# ------------------------------------------------------------
+echo "==> Building gl4es (cross-compile)"
 cd "${SRC_DIR}"
-git clone --depth=1 https://github.com/ptitSeb/gl4es.git
+[ -d gl4es ] || git clone --depth=1 https://github.com/ptitSeb/gl4es.git
 cd gl4es
-mkdir -p build && cd build
+rm -rf build && mkdir build && cd build
 cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_FLAGS="${OPTIMIZE}" \
   -DNOX11=ON -DGBM=ON -DEGL_WRAPPER=ON \
@@ -91,43 +64,54 @@ echo "Found libEGL: ${GL4ES_EGL}"
 cp "${GL4ES_GL}"  "${OUT_LIBS}/libGL.so.1"
 cp "${GL4ES_EGL}" "${OUT_LIBS}/libEGL.so.1"
 
-# --- SDL2 ---------------------------------------------------
-echo "==> Building SDL2"
+# ------------------------------------------------------------
+# SDL2 2.30.2
+# ------------------------------------------------------------
+echo "==> Building SDL2 (cross-compile)"
 cd "${SRC_DIR}"
-git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git
+[ -d SDL ] || git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git
 cd SDL
-mkdir -p build && cd build
+rm -rf build && mkdir build && cd build
 cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
+  -DCMAKE_INSTALL_PREFIX=/opt/sdl2-aarch64 \
   -DSDL_STATIC=OFF -DSDL_SHARED=ON \
-  -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
-make -j$(nproc) install
-SDL2_LIB=$(find /opt/sdl2 -name "libSDL2-2.0.so.0" -print -quit)
+  -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF \
+  -DSDL_X11=OFF -DSDL_ALSA=OFF -DSDL_PULSEAUDIO=OFF \
+  -DSDL_OSS=OFF -DSDL_DISKAUDIO=ON -DSDL_DUMMYAUDIO=ON
+make -j$(nproc)
+make install
+SDL2_LIB=$(find /opt/sdl2-aarch64 -name "libSDL2-2.0.so.0" -print -quit)
 echo "Found SDL2: ${SDL2_LIB}"
 cp "${SDL2_LIB}" "${OUT_LIBS}/libSDL2-2.0.so.0"
 
-# --- sdl12-compat -------------------------------------------
-echo "==> Building sdl12-compat"
+# ------------------------------------------------------------
+# sdl12-compat
+# ------------------------------------------------------------
+echo "==> Building sdl12-compat (cross-compile)"
 cd "${SRC_DIR}"
-git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
+[ -d sdl12-compat ] || git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
 cd sdl12-compat
 python3 "${PATCH_SCRIPT}"
-mkdir -p build && cd build
+rm -rf build && mkdir build && cd build
 cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DSDL2_INCLUDE_DIR=/opt/sdl2/include/SDL2 \
-  -DSDL2_LIBRARY=/opt/sdl2/lib/libSDL2-2.0.so \
+  -DSDL2_INCLUDE_DIR=/opt/sdl2-aarch64/include/SDL2 \
+  -DSDL2_LIBRARY=/opt/sdl2-aarch64/lib/libSDL2-2.0.so \
   -DCMAKE_C_FLAGS="${OPTIMIZE} -fvisibility=default"
 make -j$(nproc)
 SDL12_LIB=$(find "${SRC_DIR}/sdl12-compat" -name "libSDL-1.2.so.0" -print -quit)
 echo "Found sdl12-compat: ${SDL12_LIB}"
 cp "${SDL12_LIB}" "${OUT_LIBS}/libSDL-1.2.so.0"
 
-# --- Smokin' Guns -------------------------------------------
-echo "==> Building Smokin' Guns"
+# ------------------------------------------------------------
+# Smokin' Guns
+# ------------------------------------------------------------
+echo "==> Building Smokin' Guns (cross-compile)"
 cd "${SRC_DIR}"
-git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
+[ -d SmokinGuns ] || git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
 cd SmokinGuns
 python3 "${PATCH_SCRIPT}"
 
@@ -135,7 +119,7 @@ make release -j$(nproc) \
   PLATFORM=linux \
   ARCH=aarch64 \
   COMPILE_ARCH=aarch64 \
-  CC="ccache gcc" \
+  CC="${CC}" \
   BUILD_STANDALONE=1 \
   Q3UIDIR=code/ui \
   BUILD_GAME_QVM=0 \
@@ -161,4 +145,4 @@ ls -la "${REL_DIR}/"
 echo "=== smokinguns subdir ==="
 ls -la "${REL_DIR}/smokinguns/" || true
 
-echo "==> Build erfolgreich."
+echo "==> Cross-Compile erfolgreich."
