@@ -155,19 +155,22 @@ def patch_sdl12_compat_hints():
 
 
 # =====================================================================
-# [EXTENDED] Handheld Aim Assist v4 - staerker + Fire-Assist
+# [EXTENDED] Handheld Aim Assist v4 - staerker + Fire-Assist + LOS
 # =====================================================================
 def patch_aim_assist():
     """Injiziert zwei Hooks plus Zielsuchfunktion mit LOS-Check.
 
-    Verbesserungen gegenueber v3:
-      * Staerkerer Grund-Magnetismus (0.24 / 0.15 statt 0.16 / 0.09)
-      * Groesserer Kegel (15 Grad statt 12 Grad)
-      * Fire-Assist: waehrend BUTTON_ATTACK wird der Sog verdoppelt,
-        damit das Crosshair im Moment des Schusses exakt auf dem
-        Ziel liegt - ohne Snap, ohne Aimbot.
-      * Zielpunkt hoeher (32 Units, naeher an Brustmitte)
-      * Laengeres Sticky-Target (10 Frames)
+    Version 4:
+      * Staerkerer Grund-Magnetismus (0.24 / 0.15)
+      * Groesserer Kegel (15 Grad)
+      * Fire-Assist waehrend BUTTON_ATTACK
+      * Line-of-Sight-Check via CM_BoxTrace
+      * Always-on Magnetismus (kein Active-Aim-Gate)
+
+    Wichtig: CM_BoxTrace hat in Smokin' Guns 8 Parameter (inkl.
+    'int capsule' am Ende). Der Aufruf uebergibt 0 als capsule,
+    um einen reinen Punkt-Trace (Box-Trace) ohne Kapsel-Form
+    auszufuehren.
     """
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -197,7 +200,7 @@ def patch_aim_assist():
  *    - Staerkerer Grund-Magnetismus
  *    - Groesserer Kegel (15 Grad)
  *    - Fire-Assist: extra Sog waehrend BUTTON_ATTACK
- *    - Line-of-Sight-Check via CM_BoxTrace
+ *    - Line-of-Sight-Check via CM_BoxTrace (8 Parameter in SG)
  *    - Always-on Magnetismus (kein Active-Aim-Gate)
  *
  *  Bewusst KEIN Snap-to-Target: das Crosshair wird sanft gezogen,
@@ -228,7 +231,7 @@ def patch_aim_assist():
 #define HHA_STICKY_FRAMES    10
 #define HHA_MAX_DIST         4096.0f
 #define HHA_MIN_DIST           48.0f
-#define HHA_CHEST_HEIGHT     32.0f    /* hoeher als v3, Richtung Brustmitte */
+#define HHA_CHEST_HEIGHT     32.0f    /* Zielpunkt am Gegner-Torso        */
 #define HHA_LOS_LENGTH     32768.0f
 /* ------------------------------------------------------------ */
 
@@ -241,7 +244,10 @@ static float    hha_cachedAngle    = 999.0f;
 static vec3_t   hha_cachedDir      = { 0, 0, 0 };
 static qboolean hha_cachedValid    = qfalse;
 
-/* ---- Sichtlinien-Check zwischen Auge und Ziel-Torso -------- */
+/* ---- Sichtlinien-Check zwischen Auge und Ziel-Torso --------
+ * CM_BoxTrace hat in Smokin' Guns 8 Parameter (letzter: capsule).
+ * capsule = 0 -> reiner Punkt/Box-Trace (kein Kapsel-Volumen).
+ * ------------------------------------------------------------ */
 static qboolean HHA_HasLineOfSight( const vec3_t fromFeet, const vec3_t toFeet ) {
     trace_t tr;
     vec3_t  eye, chest;
@@ -254,7 +260,8 @@ static qboolean HHA_HasLineOfSight( const vec3_t fromFeet, const vec3_t toFeet )
     chest[1] = toFeet[1];
     chest[2] = toFeet[2] + HHA_CHEST_HEIGHT;
 
-    CM_BoxTrace( &tr, eye, chest, NULL, NULL, 0, CONTENTS_SOLID );
+    /* SMOKING GUNS SIGNATUR: 8 Parameter (mit 'int capsule' am Ende) */
+    CM_BoxTrace( &tr, eye, chest, NULL, NULL, 0, CONTENTS_SOLID, 0 );
 
     return ( tr.fraction >= 0.999f );
 }
@@ -377,7 +384,6 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
     if ( !hha_cachedValid || hha_cachedTarget < 0 )
         return;
 
-    /* Aktueller Winkel zwischen Blick und Ziel */
     AngleVectors( cl.viewangles, forward, NULL, NULL );
     dot = DotProduct( forward, hha_cachedDir );
     if ( dot >  1.0f ) dot =  1.0f;
@@ -430,8 +436,7 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
         content, count=1
     )
 
-    # Magnetismus-Hook wird NACH CL_JoystickMove eingefuegt und erhaelt
-    # den cmd-Zeiger, damit der Fire-Assist BUTTON_ATTACK auslesen kann.
+    # Magnetismus NACH CL_JoystickMove in CL_CreateCmd
     joy_pat = re.compile(
         r'(\n[ \t]*CL_JoystickMove\s*\(\s*&\s*cmd\s*\)\s*;)'
     )
