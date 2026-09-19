@@ -21,47 +21,7 @@ jobs:
             -v "${{ github.workspace }}:/work" \
             -w /work \
             ubuntu:20.04 \
-            bash -c "
-              set -e
-              export DEBIAN_FRONTEND=noninteractive
-
-              # --- ARM64-Multiarch aktivieren (INNERHALB des focal-Containers) ---
-              dpkg --add-architecture arm64
-
-              # Host-Quellen (focal, amd64-only) — aus dem offiziellen Image ueberschreiben
-              rm -f /etc/apt/sources.list
-              cat > /etc/apt/sources.list <<EOF
-              deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main restricted universe multiverse
-              deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal-updates main restricted universe multiverse
-              deb [arch=amd64] http://security.ubuntu.com/ubuntu focal-security main restricted universe multiverse
-              EOF
-
-              # ARM64-Quellen (focal, arm64-only)
-              cat > /etc/apt/sources.list.d/arm64.list <<EOF
-              deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse
-              deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse
-              deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse
-              EOF
-
-              apt-get update
-
-              # --- Cross-Toolchain + ARM64-Bibliotheken installieren ---
-              apt-get install -y --no-install-recommends \
-                build-essential cmake git ccache python3 pkg-config wget \
-                crossbuild-essential-arm64 \
-                libsdl1.2-dev:arm64 \
-                libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
-                libvorbis-dev:arm64 libogg-dev:arm64 \
-                libfreetype6-dev:arm64 libpng-dev:arm64 zlib1g-dev:arm64 \
-                libopus-dev:arm64 libopusfile-dev:arm64 libspeex-dev:arm64 \
-                libgbm-dev:arm64 libegl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 \
-                libdrm-dev:arm64 libx11-dev:arm64 libxext-dev:arm64 \
-                libgl1-mesa-dev:arm64 libglu1-mesa-dev:arm64 \
-                libudev-dev:arm64 libasound2-dev:arm64 libpulse-dev:arm64
-
-              # --- Build ausfuehren ---
-              bash /work/.github/scripts/build.sh
-            "
+            bash /work/.github/scripts/build.sh
 
       - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
