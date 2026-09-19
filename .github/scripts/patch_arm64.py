@@ -3,7 +3,7 @@
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
 Can be invoked from:
-  - the SmokinGuns source root (patches Makefile + q_platform.h + cl_input.c)
+  - the SmokinGuns source root (patches Makefile + q_platform.h + cl_input.c + SDL headers)
   - the sdl12-compat source root (patches SDL_HINT_* fallbacks)
 """
 
@@ -43,11 +43,11 @@ def patch_makefile():
         )
         print("[PATCHED] Makefile: Corrected BASENAME -> BASEGAME in UI objects")
 
-    # Inject the SDL 1.2 include path as a global override
-    sdl_include_line = "override CFLAGS += -I/usr/include/SDL\n"
-    if "override CFLAGS += -I/usr/include/SDL" not in content:
+    # Inject SDL2 & SDL include paths as global overrides
+    sdl_include_line = "override CFLAGS += -I/usr/include/SDL2 -I/usr/include/SDL\n"
+    if "override CFLAGS += -I/usr/include/SDL2" not in content:
         content = sdl_include_line + content
-        print("[PATCHED] Makefile: added -I/usr/include/SDL to global CFLAGS")
+        print("[PATCHED] Makefile: added -I/usr/include/SDL2 to global CFLAGS")
 
     # Hygiene and cleanups
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
@@ -123,8 +123,29 @@ def patch_q_platform():
     return patched
 
 
+def patch_sdl_headers():
+    """Ensure SDL2 header includes resolve correctly."""
+    if not os.path.isdir("code"):
+        return 0
+    patched = 0
+    for root, _dirs, files in os.walk("code"):
+        for name in files:
+            if name.endswith(".h") or name.endswith(".c"):
+                path = os.path.join(root, name)
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                if '#  include "SDL.h"' in content or '#include "SDL.h"' in content:
+                    content = content.replace('#  include "SDL.h"', '#include <SDL2/SDL.h>')
+                    content = content.replace('#include "SDL.h"', '#include <SDL2/SDL.h>')
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    patched += 1
+                    print(f"[PATCHED] SDL header path in {path}")
+    return patched
+
+
 def patch_aim_assist():
-    """Inject Target Friction, S-Curve, and Recoil Assist safely into CL_MouseMove in code/client/cl_input.c."""
+    """Inject Target Friction, S-Curve, and Recoil Assist safely using delta pointers into CL_MouseMove in code/client/cl_input.c."""
     target_file = None
     for root, _dirs, files in os.walk("code"):
         if "cl_input.c" in files:
@@ -146,7 +167,7 @@ def patch_aim_assist():
 /* [PATCHED] Handheld Aim Assist & Input Curve for ARM64 */
 #include <math.h>
 
-static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
+static void CL_ApplyHandheldAimAssist(int *mx, int *my, usercmd_t *cmd) {
     int i;
     entityState_t *ent;
     vec3_t dir, forward;
@@ -161,13 +182,13 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     }
 
     // 1. S-Kurve fuer Analogstick-Praezision (p = 1.8)
-    if (cl.mouseDx != 0) {
-        float signX = (cl.mouseDx < 0) ? -1.0f : 1.0f;
-        cl.mouseDx = (int)(signX * powf(fabsf((float)cl.mouseDx), 1.8f) * 0.1f);
+    if (mx && *mx != 0) {
+        float signX = (*mx < 0) ? -1.0f : 1.0f;
+        *mx = (int)(signX * powf(fabsf((float)*mx), 1.8f) * 0.1f);
     }
-    if (cl.mouseDy != 0) {
-        float signY = (cl.mouseDy < 0) ? -1.0f : 1.0f;
-        cl.mouseDy = (int)(signY * powf(fabsf((float)cl.mouseDy), 1.8f) * 0.065f);
+    if (my && *my != 0) {
+        float signY = (*my < 0) ? -1.0f : 1.0f;
+        *my = (int)(signY * powf(fabsf((float)*my), 1.8f) * 0.065f);
     }
 
     // 2. Target Friction (Verlangsamung bei Zielkontakt)
@@ -195,8 +216,8 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
     }
 
     if (targetFound) {
-        cl.mouseDx = (int)(cl.mouseDx * frictionFactor);
-        cl.mouseDy = (int)(cl.mouseDy * frictionFactor);
+        if (mx) *mx = (int)(*mx * frictionFactor);
+        if (my) *my = (int)(*my * frictionFactor);
     }
 
     // 3. Rueckstoss-Daempfung bei Dauerfeuer
@@ -208,11 +229,25 @@ static void CL_ApplyHandheldAimAssist(usercmd_t *cmd) {
 
     if "void CL_MouseMove(" in content:
         content = content.replace("void CL_MouseMove(", c_patch + "\nvoid CL_MouseMove(")
-        content = re.sub(
-            r"(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)",
-            r"\1\n    CL_ApplyHandheldAimAssist(cmd);",
-            content
-        )
+
+        if "cl.mouseDy[cl.executeIndex] = 0;" in content:
+            content = content.replace(
+                "cl.mouseDy[cl.executeIndex] = 0;",
+                "cl.mouseDy[cl.executeIndex] = 0;\n    CL_ApplyHandheldAimAssist(&mx, &my, cmd);"
+            )
+        elif "CL_GetMouseDelta" in content:
+            content = re.sub(
+                r"(CL_GetMouseDelta\s*\([^;]+\);)",
+                r"\1\n    CL_ApplyHandheldAimAssist(&mx, &my, cmd);",
+                content
+            )
+        else:
+            content = re.sub(
+                r"(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*cmd\s*\)\s*\{)",
+                r"\1\n    CL_ApplyHandheldAimAssist(&mx, &my, cmd);",
+                content
+            )
+
         with open(target_file, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"[PATCHED] {target_file}: Aim Assist safely injected into CL_MouseMove")
@@ -272,6 +307,7 @@ def main():
         if patch_makefile():
             applied += 1
         patch_q_platform()
+        patch_sdl_headers()
         if patch_aim_assist():
             applied += 1
 
