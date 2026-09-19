@@ -2,14 +2,9 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
-Can be invoked from:
-  - the SmokinGuns source root (patches Makefile + q_platform.h + cl_input.c)
-  - the sdl12-compat source root (patches SDL_HINT_* fallbacks)
-
-[EXTENDED] Handheld aim assist (S-Curve, Target Friction, Recoil Assist,
-           Rotational Aim Magnetism) is injected as a SINGLE call at the
-           top of CL_MouseMove. This guarantees the upstream if/else
-           control flow is never altered.
+[EXTENDED] Handheld aim assist: S-Curve, Target Friction, Sticky Target,
+           Rotational Aim Magnetism. Injected as a SINGLE call at the top
+           of CL_MouseMove so the upstream if/else flow is never broken.
 """
 
 import os
@@ -32,7 +27,6 @@ def diagnostic_dump():
 
 
 def patch_makefile():
-    """Patch the Smokin' Guns Makefile safely without altering execution logic."""
     makefile = "Makefile"
     if not os.path.exists(makefile):
         print(f"[WARN] {makefile} not found - skipping")
@@ -41,7 +35,6 @@ def patch_makefile():
     with open(makefile, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    # Fix upstream typo: All BASENAME instances in UI objects
     if "$(B)/$(BASENAME)/ui/" in content:
         content = content.replace(
             "$(B)/$(BASENAME)/ui/",
@@ -49,13 +42,11 @@ def patch_makefile():
         )
         print("[PATCHED] Makefile: Corrected BASENAME -> BASEGAME in UI objects")
 
-    # Inject the SDL 1.2 include path as a global override
     sdl_include_line = "override CFLAGS += -I/usr/include/SDL\n"
     if "override CFLAGS += -I/usr/include/SDL" not in content:
         content = sdl_include_line + content
         print("[PATCHED] Makefile: added -I/usr/include/SDL to global CFLAGS")
 
-    # Hygiene and cleanups
     content = re.sub(r"\brm\s+(?!-)", "rm -f ", content)
     content = content.replace("python ", "python3 ")
     content = content.replace("python2 ", "python3 ")
@@ -64,7 +55,6 @@ def patch_makefile():
     content = re.sub(r"-Wuninitialized", "", content)
     content = re.sub(r"-Wstrict-overflow", "", content)
 
-    # Remove toxic x86 architecture flags that trip up ARM GCC
     toxic_flags = [
         "-m32", "-m64",
         "-march=native", "march=native",
@@ -80,7 +70,6 @@ def patch_makefile():
 
 
 def patch_q_platform():
-    """Patch q_platform.h under code/ so aarch64 target is defined."""
     patched = 0
     if not os.path.isdir("code"):
         print("[WARN] code/ not found - skipping q_platform.h patches")
@@ -130,7 +119,6 @@ def patch_q_platform():
 
 
 def patch_sdl12_compat_hints():
-    """Prepend SDL_HINT_* fallbacks to sdl12-compat/src/SDL12_compat.c."""
     path = os.path.join("src", "SDL12_compat.c")
     if not os.path.exists(path):
         return False
@@ -164,26 +152,25 @@ def patch_sdl12_compat_hints():
 
 
 # =====================================================================
-# [EXTENDED] Handheld Aim Assist injection - SINGLE, SAFE injection
+# [EXTENDED] Handheld Aim Assist - single safe injection, no aimbot
 # =====================================================================
 def patch_aim_assist():
     """Inject handheld aim assist into code/client/cl_input.c.
 
-    Adds four features for gamepad play on RK3326-class handhelds:
-      * S-Curve input response        (finer control near centre)
-      * Target Friction               (input slowdown on enemy)
-      * Rotational Aim Magnetism      (soft pull toward nearest enemy)
-      * Recoil Assist                 (gentle downward pull while firing)
+    Features (all client-side, no server-side or protocol impact):
+      * S-Curve            - finer control near centre on the analog stick
+      * Target Friction    - slows down small stick movements when on target
+      * Sticky Target      - holds the same target for ~200 ms to prevent
+                             jitter when two enemies are close together
+      * Aim Magnetism      - soft pull toward nearest enemy inside an 8-deg
+                             cone, ramped down toward the cone edge
+      * Active-Aim Gate    - magnetism only runs while the player is actively
+                             moving the stick, so the crosshair never drifts
+                             on its own (this is what separates this from
+                             an aimbot)
 
-    Design notes:
-      - Exactly ONE injection point: right after the opening brace of
-        CL_MouseMove.  This cannot break any if/else chain because it
-        sits at the very top of the function body, before any branching.
-      - The S-Curve is applied in-place to cl.mouseDx[cl.mouseIndex] and
-        cl.mouseDy[cl.mouseIndex]; those are the raw deltas that will be
-        copied into the local mx/my a few lines below.
-      - All behaviour is client-side; server logic and protocol are not
-        touched.
+    Not implemented on purpose:
+      * Snap-to-target, prediction, auto-fire, wall-piercing check.
     """
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -206,14 +193,18 @@ def patch_aim_assist():
 /* ============================================================
  * [PATCHED] Handheld Aim Assist for ARM64 / RK3326
  * ============================================================
- *  S-Curve         - finer control near centre, full speed on flicks
- *  Target Friction - input slowdown when crosshair is on an enemy
- *  Recoil Assist   - gentle downward pull while firing (client-side)
- *  Aim Magnetism   - soft pull toward nearest enemy in cone
+ *  S-Curve          - finer control near centre, full speed on flicks
+ *  Target Friction  - slows small stick movements when on target
+ *  Sticky Target    - keeps last target for a few frames
+ *  Aim Magnetism    - soft pull toward nearest enemy in cone
+ *  Active-Aim Gate  - magnet only runs while the player is aiming
  *
- * Called once per frame from the top of CL_MouseMove. Client-side
- * only; authoritative game logic is untouched.
+ * Called once per frame from the top of CL_MouseMove. Client-side only.
  * Tune via the HHA_* defines below.
+ *
+ * Recoil Assist intentionally omitted: in the Quake 3 engine positive
+ * PITCH pitches the view DOWN, so adding pitch while firing pulls the
+ * crosshair down and makes aiming harder, not easier.
  * ============================================================ */
 #include <math.h>
 
@@ -221,80 +212,157 @@ def patch_aim_assist():
 #define ET_PLAYER 1
 #endif
 
-#define HHA_PI           3.14159265358979323846f
-#define HHA_MAX_ANGLE    6.0f    /* magnet cone half-angle (deg)   */
-#define HHA_MAGNETISM    0.10f   /* pull strength per frame        */
-#define HHA_CURVE_EXP    1.15f   /* >1 = finer near centre         */
-#define HHA_CURVE_REF    64.0f   /* raw units where gain == 1.0    */
-#define HHA_RECOIL_PITCH 0.12f   /* downward pull per frame firing */
+#ifndef EF_DEAD
+#define EF_DEAD 0x00000001
+#endif
 
-static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
-    int      i;
-    float    bestAngle = HHA_MAX_ANGLE;
-    vec3_t   forward, toEnt, bestDir;
-    qboolean haveTarget = qfalse;
+/* --- Tuning knobs ------------------------------------------- */
+#define HHA_PI               3.14159265358979323846f
+#define HHA_MAX_ANGLE        8.0f    /* outer cone half-angle (deg)      */
+#define HHA_FALLOFF_ANGLE    3.0f    /* full magnet strength inside this */
+#define HHA_MAGNETISM_YAW    0.14f   /* horizontal pull per frame        */
+#define HHA_MAGNETISM_PITCH  0.08f   /* vertical pull per frame          */
+#define HHA_FRICTION         0.65f   /* input scale when on target       */
+#define HHA_FRICTION_MAX_MAG 40.0f   /* friction only for inputs below   */
+#define HHA_CURVE_EXP        1.20f   /* >1 = finer near centre           */
+#define HHA_CURVE_REF        64.0f   /* raw units where gain == 1.0      */
+#define HHA_STICKY_FRAMES    12      /* ~200 ms at 60 fps                */
+#define HHA_AIM_ACTIVE_FRAMES 8      /* magnet stays alive this long     */
+#define HHA_AIM_THRESHOLD    3.0f    /* raw units to count as "aiming"   */
+#define HHA_MAX_DIST         4096.0f /* skip enemies beyond this         */
+#define HHA_MIN_DIST         48.0f   /* skip enemies inside melee range  */
+/* ------------------------------------------------------------ */
 
-    /* --- 1. S-Curve on raw mouse deltas ---------------------
-     * Applied to cl.mouseDx/cl.mouseDy[cl.mouseIndex] which are
-     * copied into the local mx/my immediately below us inside
-     * CL_MouseMove. Preserves top-end gain while attenuating small
-     * movements.                                             */
-    {
-        int *mx_raw = &cl.mouseDx[cl.mouseIndex];
-        int *my_raw = &cl.mouseDy[cl.mouseIndex];
+/* Persistent per-session state */
+static int hha_lastTargetNum    = -1;
+static int hha_lastTargetAge    = 0;
+static int hha_recentAimFrames  = 0;
 
-        if ( mx_raw && *mx_raw != 0 ) {
-            float s = ( *mx_raw < 0 ) ? -1.0f : 1.0f;
-            float a = fabsf( (float)*mx_raw );
-            *mx_raw = (int)( s * powf( a, HHA_CURVE_EXP ) /
-                             powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f ) );
-        }
-        if ( my_raw && *my_raw != 0 ) {
-            float s = ( *my_raw < 0 ) ? -1.0f : 1.0f;
-            float a = fabsf( (float)*my_raw );
-            *my_raw = (int)( s * powf( a, HHA_CURVE_EXP ) /
-                             powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f ) );
-        }
-    }
+/* Find the best enemy inside the cone. Returns clientNum or -1.
+ * Also returns the unit vector toward that enemy and its angle. */
+static int HHA_FindTarget( vec3_t bestDir, float *bestAngleOut ) {
+    int    i, best = -1;
+    float  bestAngle = HHA_MAX_ANGLE;
+    vec3_t forward, toEnt;
+
+    *bestAngleOut = 999.0f;
 
     if ( clc.state != CA_ACTIVE )
-        return;
+        return -1;
     if ( cl.snap.numEntities <= 0 )
-        return;
+        return -1;
 
-    /* --- 2. Find nearest enemy inside cone ------------------ */
     AngleVectors( cl.viewangles, forward, NULL, NULL );
 
     for ( i = 0; i < cl.snap.numEntities; i++ ) {
         entityState_t *ent = &cl.parseEntities[
             ( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
-        float dot, angle;
+        float dx, dy, dz, distSq, dot, angle;
 
         if ( ent->eType != ET_PLAYER )
             continue;
         if ( ent->number == cl.snap.ps.clientNum )
             continue;
+        if ( ent->eFlags & EF_DEAD )
+            continue;
 
-        VectorSubtract( ent->pos.trBase, cl.snap.ps.origin, toEnt );
+        dx = ent->pos.trBase[0] - cl.snap.ps.origin[0];
+        dy = ent->pos.trBase[1] - cl.snap.ps.origin[1];
+        dz = ent->pos.trBase[2] - cl.snap.ps.origin[2];
+        distSq = dx*dx + dy*dy + dz*dz;
+
+        if ( distSq < HHA_MIN_DIST * HHA_MIN_DIST ) continue;
+        if ( distSq > HHA_MAX_DIST * HHA_MAX_DIST ) continue;
+
+        toEnt[0] = dx; toEnt[1] = dy; toEnt[2] = dz;
         VectorNormalize( toEnt );
 
         dot = DotProduct( forward, toEnt );
         if ( dot >  1.0f ) dot =  1.0f;
         if ( dot < -1.0f ) dot = -1.0f;
-
         angle = acosf( dot ) * ( 180.0f / HHA_PI );
 
+        /* Sticky bonus: previously targeted enemy gets a slightly wider
+         * effective cone, preventing flip-flop when two enemies are close. */
+        if ( ent->number == hha_lastTargetNum && angle < HHA_MAX_ANGLE + 3.0f ) {
+            angle *= 0.75f;
+        }
+
         if ( angle < bestAngle ) {
-            bestAngle  = angle;
+            bestAngle = angle;
+            best      = ent->number;
             VectorCopy( toEnt, bestDir );
-            haveTarget = qtrue;
         }
     }
 
-    /* --- 3. Rotational Aim Magnetism ------------------------ */
-    if ( haveTarget ) {
+    *bestAngleOut = bestAngle;
+    return best;
+}
+
+static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
+    vec3_t bestDir;
+    float  bestAngle;
+    int    target;
+    int   *mx_raw;
+    int   *my_raw;
+    float  rawMag = 0.0f;
+    float  friction = 1.0f;
+
+    (void)cmd;
+
+    if ( clc.state != CA_ACTIVE )
+        return;
+
+    /* --- 1. Find target BEFORE touching input ----------------- */
+    target = HHA_FindTarget( bestDir, &bestAngle );
+
+    /* --- 2. Read raw deltas (still unmodified by us) ---------- */
+    mx_raw = &cl.mouseDx[cl.mouseIndex];
+    my_raw = &cl.mouseDy[cl.mouseIndex];
+
+    rawMag = sqrtf( (float)(*mx_raw * *mx_raw) +
+                    (float)(*my_raw * *my_raw) );
+
+    /* Track "player is aiming" so magnet only fires on active input. */
+    if ( rawMag >= HHA_AIM_THRESHOLD ) {
+        hha_recentAimFrames = HHA_AIM_ACTIVE_FRAMES;
+    } else if ( hha_recentAimFrames > 0 ) {
+        hha_recentAimFrames--;
+    }
+
+    /* --- 3. Target Friction: only for fine adjustments -------- */
+    if ( target >= 0 && rawMag > 0.0f && rawMag < HHA_FRICTION_MAX_MAG ) {
+        friction = HHA_FRICTION;
+    }
+
+    /* --- 4. S-Curve + friction on raw deltas ------------------ */
+    if ( *mx_raw != 0 ) {
+        float s = ( *mx_raw < 0 ) ? -1.0f : 1.0f;
+        float a = fabsf( (float)*mx_raw );
+        float curved = s * powf( a, HHA_CURVE_EXP ) /
+                           powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
+        *mx_raw = (int)( curved * friction );
+    }
+    if ( *my_raw != 0 ) {
+        float s = ( *my_raw < 0 ) ? -1.0f : 1.0f;
+        float a = fabsf( (float)*my_raw );
+        float curved = s * powf( a, HHA_CURVE_EXP ) /
+                           powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
+        *my_raw = (int)( curved * friction );
+    }
+
+    /* --- 5. Update sticky target bookkeeping ------------------ */
+    if ( target >= 0 ) {
+        hha_lastTargetNum = target;
+        hha_lastTargetAge = 0;
+    } else if ( ++hha_lastTargetAge > HHA_STICKY_FRAMES ) {
+        hha_lastTargetNum = -1;
+    }
+
+    /* --- 6. Magnetism: only while player is actively aiming --- */
+    if ( target >= 0 && hha_recentAimFrames > 0 ) {
         vec3_t targetAngles;
-        float  yawDiff, pitchDiff;
+        float  yawDiff, pitchDiff, strength;
 
         vectoangles( bestDir, targetAngles );
 
@@ -306,20 +374,22 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
         while ( pitchDiff >  180.0f ) pitchDiff -= 360.0f;
         while ( pitchDiff < -180.0f ) pitchDiff += 360.0f;
 
-        cl.viewangles[YAW]   += yawDiff   * HHA_MAGNETISM;
-        cl.viewangles[PITCH] += pitchDiff * HHA_MAGNETISM;
-    }
+        /* Ramp: full strength inside falloff, tapering to zero at edge. */
+        if ( bestAngle <= HHA_FALLOFF_ANGLE ) {
+            strength = 1.0f;
+        } else {
+            strength = 1.0f - ( bestAngle - HHA_FALLOFF_ANGLE ) /
+                              ( HHA_MAX_ANGLE - HHA_FALLOFF_ANGLE );
+            if ( strength < 0.0f ) strength = 0.0f;
+        }
 
-    /* --- 4. Recoil Assist ----------------------------------- */
-    if ( cmd && ( cmd->buttons & BUTTON_ATTACK ) ) {
-        cl.viewangles[PITCH] += HHA_RECOIL_PITCH;
+        cl.viewangles[YAW]   += yawDiff   * HHA_MAGNETISM_YAW   * strength;
+        cl.viewangles[PITCH] += pitchDiff * HHA_MAGNETISM_PITCH * strength;
     }
 }
 /* ============================================================ */
 """
 
-    # Anchor: opening brace of CL_MouseMove. This is the ONLY
-    # injection point - it cannot break any if/else chain.
     pattern = re.compile(
         r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{)'
     )
@@ -327,7 +397,6 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
         print("[WARN] CL_MouseMove signature not found - skipping aim assist")
         return False
 
-    # Insert helper functions + single call right after the opening brace.
     content = pattern.sub(
         lambda m: helper_code
                   + "\n" + m.group(1)
@@ -358,7 +427,7 @@ def main():
         if patch_makefile():
             applied += 1
         patch_q_platform()
-        patch_aim_assist()          # <-- [EXTENDED] single safe hook
+        patch_aim_assist()
 
     if is_sdl12_compat:
         print("==> Patching sdl12-compat")
