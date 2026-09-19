@@ -1,13 +1,58 @@
 #!/bin/bash
 # ============================================================
-# Cross-Compile Smokin' Guns fuer ARM64 / RK3326 auf x86_64.
-# Kein QEMU, kein Docker. Nativ auf dem GitHub-Runner.
+# Smokin' Guns - Cross-Compile fuer ARM64 / RK3326
+# Laeuft im ubuntu:20.04 x86_64 Container.
+# Erzeugt ARM64-Binaries mit GLIBC 2.31 (kompatibel mit R36S).
 # ============================================================
 set -e
 
-echo "==> Host architecture:"
-uname -m
+export DEBIAN_FRONTEND=noninteractive
 
+# ------------------------------------------------------------
+# 1. ARM64-Multiarch im Container einrichten
+# ------------------------------------------------------------
+echo "==> Setting up ARM64 multiarch"
+dpkg --add-architecture arm64
+
+# Host-Quellen (amd64 only)
+rm -f /etc/apt/sources.list
+printf '%s\n' \
+  'deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main restricted universe multiverse' \
+  'deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal-updates main restricted universe multiverse' \
+  'deb [arch=amd64] http://security.ubuntu.com/ubuntu focal-security main restricted universe multiverse' \
+  > /etc/apt/sources.list
+
+# ARM64-Quellen (arm64 only)
+mkdir -p /etc/apt/sources.list.d
+printf '%s\n' \
+  'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse' \
+  'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse' \
+  'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse' \
+  > /etc/apt/sources.list.d/arm64.list
+
+echo "==> apt-get update"
+apt-get update
+
+# ------------------------------------------------------------
+# 2. Abhaengigkeiten installieren
+# ------------------------------------------------------------
+echo "==> Installing cross-toolchain and ARM64 libraries"
+apt-get install -y --no-install-recommends \
+  build-essential cmake git ccache python3 pkg-config wget \
+  crossbuild-essential-arm64 \
+  libsdl1.2-dev:arm64 \
+  libopenal-dev:arm64 libcurl4-openssl-dev:arm64 \
+  libvorbis-dev:arm64 libogg-dev:arm64 \
+  libfreetype6-dev:arm64 libpng-dev:arm64 zlib1g-dev:arm64 \
+  libopus-dev:arm64 libopusfile-dev:arm64 libspeex-dev:arm64 \
+  libgbm-dev:arm64 libegl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 \
+  libdrm-dev:arm64 libx11-dev:arm64 libxext-dev:arm64 \
+  libgl1-mesa-dev:arm64 libglu1-mesa-dev:arm64 \
+  libudev-dev:arm64 libasound2-dev:arm64 libpulse-dev:arm64
+
+# ------------------------------------------------------------
+# 3. Pfade und Umgebung
+# ------------------------------------------------------------
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
 -fno-math-errno -fno-trapping-math -fno-semantic-interposition \
@@ -31,21 +76,21 @@ unset PKG_CONFIG_SYSROOT_DIR
 mkdir -p "${SRC_DIR}" "${OUT_LIBS}"
 
 # ------------------------------------------------------------
-# CMake 3.28.3 (Ubuntu 20.04 hat 3.16 - zu alt fuer gl4es)
+# 4. CMake 3.28.3 (focal hat nur 3.16)
 # ------------------------------------------------------------
 echo "==> Installing CMake 3.28.3"
-if [ ! -x /opt/cmake/bin/cmake ]; then
-    wget -q "https://cmake.org/files/v3.28/cmake-3.28.3-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz
-    mkdir -p /opt/cmake
-    tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
-fi
+CMAKE_VERSION=3.28.3
+cd /tmp
+wget -q "https://cmake.org/files/v3.28/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" -O /tmp/cmake.tar.gz
+mkdir -p /opt/cmake
+tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
 export PATH=/opt/cmake/bin:${PATH}
 cmake --version
 
 # ------------------------------------------------------------
-# gl4es
+# 5. gl4es
 # ------------------------------------------------------------
-echo "==> Building gl4es (cross-compile)"
+echo "==> Building gl4es"
 cd "${SRC_DIR}"
 [ -d gl4es ] || git clone --depth=1 https://github.com/ptitSeb/gl4es.git
 cd gl4es
@@ -65,9 +110,9 @@ cp "${GL4ES_GL}"  "${OUT_LIBS}/libGL.so.1"
 cp "${GL4ES_EGL}" "${OUT_LIBS}/libEGL.so.1"
 
 # ------------------------------------------------------------
-# SDL2 2.30.2
+# 6. SDL2
 # ------------------------------------------------------------
-echo "==> Building SDL2 (cross-compile)"
+echo "==> Building SDL2"
 cd "${SRC_DIR}"
 [ -d SDL ] || git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git
 cd SDL
@@ -78,8 +123,7 @@ cmake .. \
   -DCMAKE_INSTALL_PREFIX=/opt/sdl2-aarch64 \
   -DSDL_STATIC=OFF -DSDL_SHARED=ON \
   -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF \
-  -DSDL_X11=OFF -DSDL_ALSA=OFF -DSDL_PULSEAUDIO=OFF \
-  -DSDL_OSS=OFF -DSDL_DISKAUDIO=ON -DSDL_DUMMYAUDIO=ON
+  -DSDL_X11=ON -DSDL_ALSA=ON -DSDL_PULSEAUDIO=ON
 make -j$(nproc)
 make install
 SDL2_LIB=$(find /opt/sdl2-aarch64 -name "libSDL2-2.0.so.0" -print -quit)
@@ -87,9 +131,9 @@ echo "Found SDL2: ${SDL2_LIB}"
 cp "${SDL2_LIB}" "${OUT_LIBS}/libSDL2-2.0.so.0"
 
 # ------------------------------------------------------------
-# sdl12-compat
+# 7. sdl12-compat
 # ------------------------------------------------------------
-echo "==> Building sdl12-compat (cross-compile)"
+echo "==> Building sdl12-compat"
 cd "${SRC_DIR}"
 [ -d sdl12-compat ] || git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
 cd sdl12-compat
@@ -107,9 +151,9 @@ echo "Found sdl12-compat: ${SDL12_LIB}"
 cp "${SDL12_LIB}" "${OUT_LIBS}/libSDL-1.2.so.0"
 
 # ------------------------------------------------------------
-# Smokin' Guns
+# 8. Smokin' Guns
 # ------------------------------------------------------------
-echo "==> Building Smokin' Guns (cross-compile)"
+echo "==> Building Smokin' Guns"
 cd "${SRC_DIR}"
 [ -d SmokinGuns ] || git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
 cd SmokinGuns
