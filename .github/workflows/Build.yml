@@ -12,8 +12,12 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     env:
+      # Cortex-A35 Performance-Flags (RK3326 Quad-Core, ARMv8-A 64-bit)
       OPTIMIZE: "-O2 -pipe -mcpu=cortex-a35 -mtune=cortex-a35 -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector -fmerge-all-constants -DNDEBUG"
       LDFLAGS: "-Wl,-O1 -Wl,--as-needed"
+      # Verzeichnis fuer die gebauten Bibliotheken
+      OUT_LIBS: "${{ github.workspace }}/out/libs.aarch64"
+      SRC_DIR: "${{ github.workspace }}/build-work"
 
     steps:
       - name: Repository auschecken
@@ -29,8 +33,11 @@ jobs:
             gcc \
             g++ \
             make \
+            cmake \
+            git \
             ccache \
             python3 \
+            pkg-config \
             libsdl1.2-dev \
             libopenal-dev \
             libcurl4-openssl-dev \
@@ -38,21 +45,116 @@ jobs:
             libogg-dev \
             libfreetype6-dev \
             libpng-dev \
-            zlib1g-dev
-          which sdl-config && sdl-config --version
+            zlib1g-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libegl1-mesa-dev \
+            libgles2-mesa-dev \
+            libgl1-mesa-dev
+          mkdir -p "${OUT_LIBS}"
+          mkdir -p "${SRC_DIR}"
 
-      - name: Patches anwenden
+      - name: gl4es bauen
         run: |
-          python3 .github/scripts/patch_arm64.py
+          cd "${SRC_DIR}"
+          git clone --depth=1 https://github.com/ptitSeb/gl4es.git
+          cd gl4es
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="${OPTIMIZE}" \
+            -DNOX11=ON \
+            -DGBM=ON \
+            -DEGL_WRAPPER=ON \
+            -DDEFAULT_ES=2 \
+            -DSTATICLIB=OFF
+          make -j$(nproc)
+          cp lib/libGL.so.1 "${OUT_LIBS}/libGL.so.1"
+          cp lib/libEGL.so.1 "${OUT_LIBS}/libEGL.so.1"
+          echo "gl4es built. Contents of ${OUT_LIBS}:"
+          ls -la "${OUT_LIBS}"
 
-      - name: Smokin' Guns kompilieren
+      - name: SDL2 bauen
         run: |
-          make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release \
-            OPTIMIZE="$OPTIMIZE" \
-            LDFLAGS="$LDFLAGS"
+          cd "${SRC_DIR}"
+          git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git
+          cd SDL
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
+            -DSDL_STATIC=OFF \
+            -DSDL_SHARED=ON \
+            -DSDL_KMSDRM=ON \
+            -DSDL_WAYLAND=OFF \
+            -DCMAKE_C_FLAGS="${OPTIMIZE}"
+          make -j$(nproc) install
+          cp /opt/sdl2/lib/libSDL2-2.0.so.0 "${OUT_LIBS}/libSDL2-2.0.so.0"
+          echo "SDL2 built. Contents of ${OUT_LIBS}:"
+          ls -la "${OUT_LIBS}"
+
+      - name: sdl12-compat patchen und bauen
+        run: |
+          cd "${SRC_DIR}"
+          git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
+          cd sdl12-compat
+          # patch_arm64.py erkennt sdl12-compat anhand von src/SDL12_compat.c
+          python3 "${{ github.workspace }}/.github/scripts/patch_arm64.py"
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL2_INCLUDE_DIR=/opt/sdl2/include/SDL2 \
+            -DSDL2_LIBRARY=/opt/sdl2/lib/libSDL2-2.0.so \
+            -DCMAKE_C_FLAGS="${OPTIMIZE} -fvisibility=default"
+          make -j$(nproc)
+          cp libSDL-1.2.so.0 "${OUT_LIBS}/libSDL-1.2.so.0"
+          echo "sdl12-compat built. Contents of ${OUT_LIBS}:"
+          ls -la "${OUT_LIBS}"
+
+      - name: Smokin' Guns patchen und bauen
+        run: |
+          cd "${SRC_DIR}"
+          git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
+          cd SmokinGuns
+          # patch_arm64.py erkennt SmokinGuns anhand von Makefile
+          python3 "${{ github.workspace }}/.github/scripts/patch_arm64.py"
+
+          # Build mit allen Flags aus dem 38-Minuten-Run
+          make release -j$(nproc) \
+            PLATFORM=linux \
+            ARCH=aarch64 \
+            COMPILE_ARCH=aarch64 \
+            CC="ccache gcc" \
+            BUILD_STANDALONE=1 \
+            Q3UIDIR=code/ui \
+            BUILD_GAME_QVM=0 \
+            BUILD_GAME_SO=1 \
+            BUILD_SERVER=0 \
+            BUILD_RENDERER_REND2=0 \
+            USE_OPENAL=0 \
+            USE_CODEC_VORBIS=0 \
+            USE_CURL=0 \
+            USE_MUMBLE=0 \
+            USE_VOIP=0 \
+            USE_INTERNAL_ZLIB=1 \
+            USE_INTERNAL_SPEEX=1 \
+            USE_LOCAL_HEADERS=0 \
+            WERROR=0 \
+            OPTIMIZE="${OPTIMIZE}" \
+            LDFLAGS="${LDFLAGS}"
+
+          echo "=== Build directory contents ==="
+          ls -la build/release-linux-aarch64/
+
+      - name: Bibliotheken neben die Binaerdateien kopieren
+        run: |
+          cp "${OUT_LIBS}/"*.so* "${SRC_DIR}/SmokinGuns/build/release-linux-aarch64/" || true
+          echo "=== Final release directory ==="
+          ls -la "${SRC_DIR}/SmokinGuns/build/release-linux-aarch64/"
 
       - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
           name: smokinguns-rk3326-aarch64
-          path: build/release-linux-aarch64/
+          path: build-work/SmokinGuns/build/release-linux-aarch64/
+          if-no-files-found: error
