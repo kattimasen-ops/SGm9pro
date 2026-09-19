@@ -2,7 +2,12 @@
 # ============================================================
 # Smokin' Guns - ARM64 Build (ubuntu:20.04 aarch64 + QEMU)
 # Basiert auf dem erfolgreichen 38-Minuten-Run.
-# Einzige Ergaenzung: patch_arm64.py injiziert den Aim-Assist.
+# Aim-Assist wird ueber patch_arm64.py injiziert.
+#
+# Robustheit:
+#   - make mit -j2 statt -j$(nproc)  (halbiert QEMU-Speicherdruck)
+#   - Dreifacher Retry pro make-Aufruf (faengt QEMU-Zufallscrashs ab)
+#   - ccache wird per GitHub Actions Cache persistiert
 # ============================================================
 set -e
 
@@ -18,7 +23,7 @@ export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 echo "==> pwd: $(pwd)"
 
 # ------------------------------------------------------------
-# Abhaengigkeiten (identisch zum erfolgreichen Run)
+# Abhaengigkeiten (identisch zum erfolgreichen 38-Minuten-Run)
 # ------------------------------------------------------------
 apt-get update
 apt-get install -y --no-install-recommends \
@@ -56,7 +61,10 @@ cd gl4es
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="${OPTIMIZE}" \
   -DNOX11=ON -DGBM=ON -DEGL_WRAPPER=ON -DDEFAULT_ES=2 -DSTATICLIB=OFF
-make -j$(nproc)
+
+# Robustheits-Retry: bis zu 3 Versuche
+make -j2 || make -j2 || make -j2
+
 GL4ES_LIB=$(find /work/src/gl4es -name libGL.so.1 -print -quit)
 EGL_LIB=$(find /work/src/gl4es -name libEGL.so.1 -print -quit)
 cp "${GL4ES_LIB}" /work/out/libs.aarch64/libGL.so.1
@@ -72,7 +80,10 @@ cd SDL
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
   -DSDL_STATIC=OFF -DSDL_SHARED=ON -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
-make -j$(nproc) install
+
+make -j2 || make -j2 || make -j2
+make -j2 install || make -j2 install || make -j2 install
+
 SDL2_LIB=$(find /opt/sdl2 -name libSDL2-2.0.so.0 -print -quit)
 cp "${SDL2_LIB}" /work/out/libs.aarch64/libSDL2-2.0.so.0
 
@@ -89,12 +100,14 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
   -DSDL2_INCLUDE_DIR=/opt/sdl2/include/SDL2 \
   -DSDL2_LIBRARY=/opt/sdl2/lib/libSDL2-2.0.so \
   -DCMAKE_C_FLAGS="${OPTIMIZE} -fvisibility=default"
-make -j$(nproc)
+
+make -j2 || make -j2 || make -j2
+
 SDL12_LIB=$(find /work/src/sdl12-compat -name libSDL-1.2.so.0 -print -quit)
 cp "${SDL12_LIB}" /work/out/libs.aarch64/libSDL-1.2.so.0
 
 # ------------------------------------------------------------
-# Smokin' Guns (mit patch_arm64.py — hier wird der Aim-Assist injiziert)
+# Smokin' Guns (mit patch_arm64.py — Aim-Assist wird injiziert)
 # ------------------------------------------------------------
 echo "==> Building Smokin' Guns"
 cd /work/src
@@ -102,8 +115,51 @@ git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
 cd SmokinGuns
 python3 /work/.github/scripts/patch_arm64.py
 
-make release -j$(nproc) \
-  PLATFORM=linux \
+make release -j2 PLATFORM=linux \
+  ARCH=aarch64 \
+  COMPILE_ARCH=aarch64 \
+  CC="ccache gcc" \
+  BUILD_STANDALONE=1 \
+  Q3UIDIR=code/ui \
+  BUILD_GAME_QVM=0 \
+  BUILD_GAME_SO=1 \
+  BUILD_SERVER=0 \
+  BUILD_RENDERER_REND2=0 \
+  USE_OPENAL=0 \
+  USE_CODEC_VORBIS=0 \
+  USE_CURL=0 \
+  USE_MUMBLE=0 \
+  USE_VOIP=0 \
+  USE_INTERNAL_ZLIB=1 \
+  USE_INTERNAL_SPEEX=1 \
+  USE_LOCAL_HEADERS=0 \
+  WERROR=0 \
+  OPTIMIZE="${OPTIMIZE}" \
+  LDFLAGS="${LDFLAGS}" \
+  || \
+make release -j2 PLATFORM=linux \
+  ARCH=aarch64 \
+  COMPILE_ARCH=aarch64 \
+  CC="ccache gcc" \
+  BUILD_STANDALONE=1 \
+  Q3UIDIR=code/ui \
+  BUILD_GAME_QVM=0 \
+  BUILD_GAME_SO=1 \
+  BUILD_SERVER=0 \
+  BUILD_RENDERER_REND2=0 \
+  USE_OPENAL=0 \
+  USE_CODEC_VORBIS=0 \
+  USE_CURL=0 \
+  USE_MUMBLE=0 \
+  USE_VOIP=0 \
+  USE_INTERNAL_ZLIB=1 \
+  USE_INTERNAL_SPEEX=1 \
+  USE_LOCAL_HEADERS=0 \
+  WERROR=0 \
+  OPTIMIZE="${OPTIMIZE}" \
+  LDFLAGS="${LDFLAGS}" \
+  || \
+make release -j2 PLATFORM=linux \
   ARCH=aarch64 \
   COMPILE_ARCH=aarch64 \
   CC="ccache gcc" \
