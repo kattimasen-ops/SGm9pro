@@ -21,16 +21,16 @@ jobs:
         run: |
           docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
-      - name: Ubuntu 18.04 ARM64 Container bauen und Build ausfuehren
+      - name: Ubuntu 20.04 ARM64 Container bauen und Build ausfuehren
         run: |
           docker run --rm \
             --platform linux/arm64 \
             -v "${{ github.workspace }}:/work" \
             -w /work \
-            arm64v8/ubuntu:18.04 \
+            arm64v8/ubuntu:20.04 \
             bash -c "
               apt-get update || true
-              apt-get install -y ca-certificates
+              apt-get install -y ca-certificates wget
               update-ca-certificates
               bash /work/.github/scripts/build.sh
             "
@@ -38,6 +38,6 @@ jobs:
       - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: smokinguns-rk3326-aarch64-glibc230
+          name: smokinguns-rk3326-aarch64
           path: build-work/SmokinGuns/build/release-linux-aarch64/
           if-no-files-found: error
