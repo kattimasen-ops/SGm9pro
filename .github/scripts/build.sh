@@ -8,6 +8,7 @@
 #   - make mit -j2 statt -j$(nproc)  (halbiert QEMU-Speicherdruck)
 #   - Dreifacher Retry pro make-Aufruf (faengt QEMU-Zufallscrashs ab)
 #   - ccache wird per GitHub Actions Cache persistiert
+#   - SDL2 und sdl12-compat: nur Bibliotheks-Targets bauen (keine Tests)
 # ============================================================
 set -e
 
@@ -71,26 +72,28 @@ cp "${GL4ES_LIB}" /work/out/libs.aarch64/libGL.so.1
 cp "${EGL_LIB}"   /work/out/libs.aarch64/libEGL.so.1
 
 # ------------------------------------------------------------
-# SDL2 2.30.2
+# SDL2 2.30.2  (nur Bibliothek, KEINE Tests)
 # ------------------------------------------------------------
-echo "==> Building SDL2"
+echo "==> Building SDL2 (library target only)"
 cd /work/src
 git clone --depth=1 -b release-2.30.2 https://github.com/libsdl-org/SDL.git
 cd SDL
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/sdl2 \
-  -DSDL_STATIC=OFF -DSDL_SHARED=ON -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF
+  -DSDL_STATIC=OFF -DSDL_SHARED=ON -DSDL_KMSDRM=ON -DSDL_WAYLAND=OFF \
+  -DSDL_TESTS=OFF
 
-make -j2 || make -j2 || make -j2
+# Nur die Bibliothek bauen - Tests ueberspringen (spart ~30 QEMU-Compiles)
+make -j2 SDL2 || make -j2 SDL2 || make -j2 SDL2
 make -j2 install || make -j2 install || make -j2 install
 
 SDL2_LIB=$(find /opt/sdl2 -name libSDL2-2.0.so.0 -print -quit)
 cp "${SDL2_LIB}" /work/out/libs.aarch64/libSDL2-2.0.so.0
 
 # ------------------------------------------------------------
-# sdl12-compat (mit patch_arm64.py)
+# sdl12-compat (mit patch_arm64.py)  (nur Bibliothek, KEINE Tests)
 # ------------------------------------------------------------
-echo "==> Building sdl12-compat"
+echo "==> Building sdl12-compat (library targets only)"
 cd /work/src
 git clone --depth=1 https://github.com/libsdl-org/sdl12-compat.git
 cd sdl12-compat
@@ -101,7 +104,8 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
   -DSDL2_LIBRARY=/opt/sdl2/lib/libSDL2-2.0.so \
   -DCMAKE_C_FLAGS="${OPTIMIZE} -fvisibility=default"
 
-make -j2 || make -j2 || make -j2
+# Nur die zwei Bibliotheks-Targets bauen - Tests ueberspringen
+make -j2 SDL SDLmain || make -j2 SDL SDLmain || make -j2 SDL SDLmain
 
 SDL12_LIB=$(find /work/src/sdl12-compat -name libSDL-1.2.so.0 -print -quit)
 cp "${SDL12_LIB}" /work/out/libs.aarch64/libSDL-1.2.so.0
