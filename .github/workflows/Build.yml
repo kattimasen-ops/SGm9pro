@@ -32,14 +32,9 @@ jobs:
           distro: ubuntu20.04
           githubToken: ${{ github.token }}
 
-          # [FIX] setup laeuft auf dem Host als Runner-User.
-          # Nur Verzeichnisse anlegen, KEIN apt.
-          setup: |
-            mkdir -p "${PWD}/build"
-
-          # [FIX] install laeuft IM CONTAINER waehrend docker build
-          # als root. apt-get funktioniert hier einwandfrei.
-          # Ab v3 verfuegbar.
+          # [FIX] apt-get MUSS im install-Block stehen (laeuft als root
+          # waehrend docker build). NICHT im setup-Block (laeuft auf dem
+          # Host als Runner-User ohne Schreibrechte auf /var/lib/apt/lists).
           install: |
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -59,11 +54,15 @@ jobs:
               zlib1g-dev
             which sdl-config && sdl-config --version
 
-          # [FIX] run laeuft im Container nach dem Start.
-          # --user root stellt Schreibrechte fuer make sicher.
-          dockerRunArgs: --user root
-
+          # [FIX] KEIN dockerRunArgs. In v3 ersetzt dockerRunArgs die
+          # Standardargumente (--platform, --workdir /work, --volume
+          # $PWD:/work) statt sie zu ergaenzen. Das war die Ursache fuer
+          # "no specific platform was requested" und "can't open file
+          # 'patch_arm64.py'". Ohne dockerRunArgs setzt die Action die
+          # Standardargumente korrekt und der Container laeuft in /work.
           run: |
+            pwd
+            ls -la
             python3 patch_arm64.py
             make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release \
               OPTIMIZE="$OPTIMIZE" \
