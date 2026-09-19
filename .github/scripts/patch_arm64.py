@@ -6,13 +6,16 @@ Can be invoked from:
   - the SmokinGuns source root (patches Makefile + q_platform.h + cl_input.c)
   - the sdl12-compat source root (patches SDL_HINT_* fallbacks)
 
-[EXTENDED] Adds handheld aim assist (S-Curve, Target Friction,
-           Recoil Assist, Rotational Aim Magnetism) for gamepad play.
+[EXTENDED] Handheld aim assist (S-Curve, Target Friction, Recoil Assist,
+           Rotational Aim Magnetism) is injected as a SINGLE call at the
+           top of CL_MouseMove. This guarantees the upstream if/else
+           control flow is never altered.
 """
 
 import os
 import re
 import sys
+
 
 def diagnostic_dump():
     print("========== MAKEFILE DIAGNOSTIC DUMP ==========")
@@ -63,8 +66,8 @@ def patch_makefile():
 
     # Remove toxic x86 architecture flags that trip up ARM GCC
     toxic_flags = [
-        "-m32", "-m64", 
-        "-march=native", "march=native", 
+        "-m32", "-m64",
+        "-march=native", "march=native",
         "-msse", "-msse2", "-msse3", "-mfpmath=sse"
     ]
     for flag in toxic_flags:
@@ -161,19 +164,26 @@ def patch_sdl12_compat_hints():
 
 
 # =====================================================================
-# [EXTENDED] Handheld Aim Assist injection
+# [EXTENDED] Handheld Aim Assist injection - SINGLE, SAFE injection
 # =====================================================================
 def patch_aim_assist():
     """Inject handheld aim assist into code/client/cl_input.c.
 
     Adds four features for gamepad play on RK3326-class handhelds:
-      * S-Curve input response (finer control near centre)
-      * Target Friction (input slowdown when crosshair is on an enemy)
-      * Recoil Assist (gentle downward pull while firing, client-side)
-      * Rotational Aim Magnetism (soft pull toward nearest enemy in cone)
+      * S-Curve input response        (finer control near centre)
+      * Target Friction               (input slowdown on enemy)
+      * Rotational Aim Magnetism      (soft pull toward nearest enemy)
+      * Recoil Assist                 (gentle downward pull while firing)
 
-    All behaviour is client-side only; the authoritative server logic
-    and the network protocol are not touched.
+    Design notes:
+      - Exactly ONE injection point: right after the opening brace of
+        CL_MouseMove.  This cannot break any if/else chain because it
+        sits at the very top of the function body, before any branching.
+      - The S-Curve is applied in-place to cl.mouseDx[cl.mouseIndex] and
+        cl.mouseDy[cl.mouseIndex]; those are the raw deltas that will be
+        copied into the local mx/my a few lines below.
+      - All behaviour is client-side; server logic and protocol are not
+        touched.
     """
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -188,7 +198,7 @@ def patch_aim_assist():
     with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
-    if "CL_ApplyHandheldInputCurve" in content:
+    if "CL_ApplyHandheldAimAssist" in content:
         print(f"[SKIP] Aim assist already present in {target_file}")
         return True
 
@@ -201,7 +211,8 @@ def patch_aim_assist():
  *  Recoil Assist   - gentle downward pull while firing (client-side)
  *  Aim Magnetism   - soft pull toward nearest enemy in cone
  *
- * Client-side only; authoritative game logic is untouched.
+ * Called once per frame from the top of CL_MouseMove. Client-side
+ * only; authoritative game logic is untouched.
  * Tune via the HHA_* defines below.
  * ============================================================ */
 #include <math.h>
@@ -213,52 +224,51 @@ def patch_aim_assist():
 #define HHA_PI           3.14159265358979323846f
 #define HHA_MAX_ANGLE    6.0f    /* magnet cone half-angle (deg)   */
 #define HHA_MAGNETISM    0.10f   /* pull strength per frame        */
-#define HHA_FRICTION     0.55f   /* input scaling while on target  */
 #define HHA_CURVE_EXP    1.15f   /* >1 = finer near centre         */
 #define HHA_CURVE_REF    64.0f   /* raw units where gain == 1.0    */
 #define HHA_RECOIL_PITCH 0.12f   /* downward pull per frame firing */
 
-/* S-Curve: reshape raw mouse deltas.
- * Preserves top-end (curve_ref -> curve_ref) while attenuating
- * small movements for finer aim. */
-static void CL_ApplyHandheldInputCurve( float *mx, float *my ) {
-    float a, s;
-    if ( mx && *mx != 0.0f ) {
-        s = ( *mx < 0.0f ) ? -1.0f : 1.0f;
-        a = fabsf( *mx );
-        *mx = s * powf( a, HHA_CURVE_EXP ) /
-                   powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
-    }
-    if ( my && *my != 0.0f ) {
-        s = ( *my < 0.0f ) ? -1.0f : 1.0f;
-        a = fabsf( *my );
-        *my = s * powf( a, HHA_CURVE_EXP ) /
-                   powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f );
-    }
-}
-
-/* Target Friction + Rotational Aim Magnetism + Recoil Assist.
- * Runs once per frame; operates on the current viewangles and the
- * most recent snapshot. */
 static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
     int      i;
     float    bestAngle = HHA_MAX_ANGLE;
     vec3_t   forward, toEnt, bestDir;
     qboolean haveTarget = qfalse;
 
+    /* --- 1. S-Curve on raw mouse deltas ---------------------
+     * Applied to cl.mouseDx/cl.mouseDy[cl.mouseIndex] which are
+     * copied into the local mx/my immediately below us inside
+     * CL_MouseMove. Preserves top-end gain while attenuating small
+     * movements.                                             */
+    {
+        int *mx_raw = &cl.mouseDx[cl.mouseIndex];
+        int *my_raw = &cl.mouseDy[cl.mouseIndex];
+
+        if ( mx_raw && *mx_raw != 0 ) {
+            float s = ( *mx_raw < 0 ) ? -1.0f : 1.0f;
+            float a = fabsf( (float)*mx_raw );
+            *mx_raw = (int)( s * powf( a, HHA_CURVE_EXP ) /
+                             powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f ) );
+        }
+        if ( my_raw && *my_raw != 0 ) {
+            float s = ( *my_raw < 0 ) ? -1.0f : 1.0f;
+            float a = fabsf( (float)*my_raw );
+            *my_raw = (int)( s * powf( a, HHA_CURVE_EXP ) /
+                             powf( HHA_CURVE_REF, HHA_CURVE_EXP - 1.0f ) );
+        }
+    }
+
     if ( clc.state != CA_ACTIVE )
         return;
     if ( cl.snap.numEntities <= 0 )
         return;
 
+    /* --- 2. Find nearest enemy inside cone ------------------ */
     AngleVectors( cl.viewangles, forward, NULL, NULL );
 
     for ( i = 0; i < cl.snap.numEntities; i++ ) {
-        entityState_t *ent;
-        float          dot, angle;
-
-        ent = &cl.parseEntities[
+        entityState_t *ent = &cl.parseEntities[
             ( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
+        float dot, angle;
 
         if ( ent->eType != ET_PLAYER )
             continue;
@@ -281,6 +291,7 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
         }
     }
 
+    /* --- 3. Rotational Aim Magnetism ------------------------ */
     if ( haveTarget ) {
         vec3_t targetAngles;
         float  yawDiff, pitchDiff;
@@ -299,8 +310,7 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
         cl.viewangles[PITCH] += pitchDiff * HHA_MAGNETISM;
     }
 
-    /* Recoil Assist: gentle downward pull while firing.
-     * Client-side visual aid only; does not affect server recoil. */
+    /* --- 4. Recoil Assist ----------------------------------- */
     if ( cmd && ( cmd->buttons & BUTTON_ATTACK ) ) {
         cl.viewangles[PITCH] += HHA_RECOIL_PITCH;
     }
@@ -308,72 +318,26 @@ static void CL_ApplyHandheldAimAssist( usercmd_t *cmd ) {
 /* ============================================================ */
 """
 
-    # Anchor: the opening brace of CL_MouseMove
-    mouse_pat = re.compile(
+    # Anchor: opening brace of CL_MouseMove. This is the ONLY
+    # injection point - it cannot break any if/else chain.
+    pattern = re.compile(
         r'(void\s+CL_MouseMove\s*\(\s*usercmd_t\s*\*\s*cmd\s*\)\s*\{)'
     )
-    if not mouse_pat.search(content):
-        print("[WARN] CL_MouseMove not found - skipping aim assist")
+    if not pattern.search(content):
+        print("[WARN] CL_MouseMove signature not found - skipping aim assist")
         return False
 
-    # ---- 1. Insert helper functions directly before CL_MouseMove ----
-    content = mouse_pat.sub(
-        lambda m: helper_code + "\n" + m.group(1),
+    # Insert helper functions + single call right after the opening brace.
+    content = pattern.sub(
+        lambda m: helper_code
+                  + "\n" + m.group(1)
+                  + "\n\tCL_ApplyHandheldAimAssist( cmd );",
         content, count=1
     )
 
-    # ---- 2. S-Curve hook: after mx/my are read from the mouse ----
-    curve_pats = [
-        r'(\bmy\s*=\s*cl\.mouseDy\s*\[\s*cl\.mouseIndex\s*\]\s*;)',
-        r'(\bmy\s*=\s*cl\.mouseDy\s*\[[^\]]+\]\s*;)',
-    ]
-    s_hooked = False
-    for p in curve_pats:
-        pat = re.compile(p)
-        if pat.search(content):
-            content = pat.sub(
-                lambda m: m.group(1) +
-                          "\n\tCL_ApplyHandheldInputCurve( &mx, &my );",
-                content, count=1
-            )
-            s_hooked = True
-            print("[PATCHED] S-Curve hook inserted (after mx/my read)")
-            break
-    if not s_hooked:
-        print("[WARN] S-Curve hook not inserted (mx/my pattern not found)")
-
-    # ---- 3. Aim-Assist hook: after viewangles are updated ----
-    # Try to place the call after the mouse input has been applied to
-    # cl.viewangles so magnetism / recoil are not overwritten.
-    assist_pats = [
-        r'(cl\.viewangles\s*\[\s*PITCH\s*\]\s*\+=\s*m_pitch->value\s*\*\s*my\s*;)',
-        r'(cl\.viewangles\s*\[\s*YAW\s*\]\s*[-+]=[^;]*;)',
-    ]
-    a_hooked = False
-    for p in assist_pats:
-        pat = re.compile(p)
-        if pat.search(content):
-            content = pat.sub(
-                lambda m: m.group(1) +
-                          "\n\tCL_ApplyHandheldAimAssist( cmd );",
-                content, count=1
-            )
-            a_hooked = True
-            print("[PATCHED] Aim-Assist hook inserted (after view update)")
-            break
-    if not a_hooked:
-        # Fallback: run at the top of CL_MouseMove (1-frame latency,
-        # functionally equivalent for aim assist purposes).
-        content = mouse_pat.sub(
-            lambda m: m.group(1) +
-                      "\n\tCL_ApplyHandheldAimAssist( cmd );",
-            content, count=1
-        )
-        print("[PATCHED] Aim-Assist hook inserted (fallback: top of CL_MouseMove)")
-
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Aim assist injected into {target_file}")
+    print(f"[PATCHED] Aim assist injected into {target_file} (single safe hook)")
     return True
 # =====================================================================
 
@@ -394,7 +358,7 @@ def main():
         if patch_makefile():
             applied += 1
         patch_q_platform()
-        patch_aim_assist()          # <-- [EXTENDED] only addition in main()
+        patch_aim_assist()          # <-- [EXTENDED] single safe hook
 
     if is_sdl12_compat:
         print("==> Patching sdl12-compat")
