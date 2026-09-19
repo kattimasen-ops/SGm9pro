@@ -21,7 +21,7 @@ jobs:
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: aarch64
-          # Ubuntu 20.04 sichert die GLIBC 2.31 Kompatibilität für ArkOS/AmberELEC
+          # Ubuntu 20.04 sichert die GLIBC 2.31 Kompatibilität für RK3326 OS (ArkOS/AmberELEC)
           distro: ubuntu20.04
           githubToken: ${{ github.token }}
           
@@ -41,10 +41,17 @@ jobs:
               libogg-dev \
               libfreetype6-dev \
               libpng-dev \
-              zlib1g-dev
+              zlib1g-dev \
+              # KORRIGIERT: Stellen Sie sicher, dass sdl12-compat NICHT installiert wird,
+              # um Header-Konflikte zu vermeiden.
+              # libsdl12-compat-dev \  # Nicht installieren!
+            # KORRIGIERT: Überprüfen Sie, ob sdl-config vorhanden ist und auf SDL1.2 zeigt.
+            which sdl-config && sdl-config --version
 
           run: |
             python3 patch_build.py
+            # KORRIGIERT: Explizite Angabe von ARCH und PLATFORM.
+            # Stellen Sie sicher, dass ARCH_STRING in q_platform.h mit ARCH übereinstimmt.
             make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release
 
       - name: Build-Artefakte hochladen
