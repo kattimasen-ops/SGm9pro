@@ -1,4 +1,4 @@
-name: Build Smokin' Guns (aarch64)
+name: Build Smokin' Guns (RK3326 / ARM64)
 
 on:
   push:
@@ -17,14 +17,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build in ARM64-Umgebung ausführen
+      - name: Build in Ubuntu 20.04 ARM64-Umgebung ausführen
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: aarch64
-          distro: ubuntu22.04
+          # Ubuntu 20.04 sichert die GLIBC 2.31 Kompatibilität für ArkOS/AmberELEC
+          distro: ubuntu20.04
           githubToken: ${{ github.token }}
           
-          # Paketinstallation vor dem eigentlichen Run
           setup: |
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -43,7 +43,6 @@ jobs:
               libpng-dev \
               zlib1g-dev
 
-          # Eigentliche Build-Schritte
           run: |
             python3 patch_build.py
             make USE_SDL2=0 ARCH=aarch64 PLATFORM=linux -j$(nproc) release
@@ -51,5 +50,5 @@ jobs:
       - name: Build-Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: smokinguns-aarch64
+          name: smokinguns-rk3326-aarch64
           path: build/release-linux-aarch64/
