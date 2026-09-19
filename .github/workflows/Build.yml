@@ -55,7 +55,7 @@ jobs:
             python3 -u .github/scripts/patch_arm64.py
 
             echo '===== RUNNING MAKE ====='
-            make -j\$(nproc) ARCH=aarch64 BUILD_CLIENT=1 BUILD_GAME_SO=1 2>&1 | tee /work/build-full.log
+            make -j$(nproc) ARCH=aarch64 BUILD_CLIENT=1 BUILD_GAME_SO=1 USE_SDL2=1 2>&1 | tee /work/build-full.log
           "
 
       - name: Upload Full Build Log
