@@ -2,15 +2,12 @@
 """
 Patch Smokin' Guns and sdl12-compat for ARM64 build (RK3326 / Cortex-A35).
 
-v11.9 - Drei Fixes:
-  FIX 1: Hitmarker-Hook von CG_Draw2D nach CG_DrawActive (immer einmal/Frame)
-  FIX 2: Zoom-Scan direkt in Cgame (unabhaengig von der Client-Bridge)
-  FIX 3: Neuer Cvar cg_handheldAimPreset (0=Custom, 1=Online, 2=Offline)
-         + Multi-Slider im Menue zur Statusanzeige
-  AUS v11.8:
-    - Smart-LOS, Falloff 0.85, Strength-Cap 1.20
-    - Zoom-Defaults: Near=100, Far=800, Fov=45, Speed=12
-    - Respawn-Reset via PERS_SPAWN_COUNT
+v12.0 - Finale Version mit korrigierter Spiel-Logik:
+  - Snapshot-Age-Kompensation ist jetzt IMMER aktiv
+  - Overshoot-Schutz (Pull-Cap) verhindert Ruckeln und Zielverfehlung
+  - Zoom-Scan nutzt jetzt die Snapshot-Position (ent->pos.trBase)
+  - Hitmarker prueft auf lebende Ziele (EF_DEAD)
+  - Respawn-Reset robuster durch PERS_SPAWN_COUNT
 """
 
 import os
@@ -32,9 +29,6 @@ def diagnostic_dump():
     print("==============================================\n")
 
 
-# ============================================================================
-# Makefile / Platform / SDL12-compat
-# ============================================================================
 def patch_makefile():
     makefile = "Makefile"
     if not os.path.exists(makefile):
@@ -123,9 +117,6 @@ def patch_sdl12_compat_hints():
     return True
 
 
-# ============================================================================
-# CVAR-REGISTRIERUNG
-# ============================================================================
 AIM_CVAR_SUFFIXES = [
     "AimAssist", "AimAssistFire", "AimAssistAngle",
     "AimAssistStrength", "AimAssistFriction", "AimAssistPitch",
@@ -154,41 +145,36 @@ def patch_client_cvar():
         return False
 
     lines = [
-        "\t/* [PATCHED] Handheld Aim Assist cvars - basic */",
+        "\t/* [PATCHED v12] Handheld Aim Assist cvars */",
         "\tCvar_Get (\"cg_handheldAimAssist\", \"1\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistFire\", \"1\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistAngle\", \"22\", CVAR_ARCHIVE);",
-        "\tCvar_Get (\"cg_handheldAimAssistStrength\", \"0.75\", CVAR_ARCHIVE);",
+        "\tCvar_Get (\"cg_handheldAimAssistStrength\", \"0.55\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistFriction\", \"0.92\", CVAR_ARCHIVE);",
-        "\t/* [PATCHED] Handheld Aim Assist cvars - advanced */",
-        "\tCvar_Get (\"cg_handheldAimAssistPitch\", \"0.85\", CVAR_ARCHIVE);",
+        "\tCvar_Get (\"cg_handheldAimAssistPitch\", \"0.80\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistLead\", \"0\", CVAR_ARCHIVE);",
-        "\tCvar_Get (\"cg_handheldAimAssistSticky\", \"18\", CVAR_ARCHIVE);",
+        "\tCvar_Get (\"cg_handheldAimAssistSticky\", \"15\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistMaxDist\", \"3000\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistLOS\", \"1\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistUnlaggedSync\", \"0\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistInterpolate\", \"1\", CVAR_ARCHIVE);",
-        "\tCvar_Get (\"cg_handheldAimAssistSnapAngle\", \"8\", CVAR_ARCHIVE);",
-        "\t/* [PATCHED] Handheld Aim Assist cvars - dynamic zoom */",
+        "\tCvar_Get (\"cg_handheldAimAssistSnapAngle\", \"5\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistZoom\", \"1\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistZoomNear\", \"100\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistZoomFar\", \"800\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistZoomFov\", \"45\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldAimAssistZoomSpeed\", \"12\", CVAR_ARCHIVE);",
-        "\t/* [PATCHED] Handheld QoL cvars */",
         "\tCvar_Get (\"cg_handheldAutoSwitch\", \"1\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldHitMarker\", \"1\", CVAR_ARCHIVE);",
         "\tCvar_Get (\"cg_handheldDamageIndicator\", \"1\", CVAR_ARCHIVE);",
-        "\t/* [PATCHED] Preset-Status: 0=Custom, 1=Online, 2=Offline */",
         "\tCvar_Get (\"cg_handheldAimPreset\", \"0\", CVAR_ARCHIVE);",
-        "\t/* [PATCHED] Internal - Client -> Cgame Bruecke */",
         "\tCvar_Get (\"cg_handheldAimAssistTargetDist\", \"0\", 0);",
     ]
     insertion = anchor + "\n" + "\n".join(lines)
     content = content.replace(anchor, insertion, 1)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print("[PATCHED] cl_main.c: 22 cvars + 1 internal bridge cvar registered")
+    print("[PATCHED] cl_main.c: 22 cvars registered")
     return True
 
 
@@ -211,7 +197,7 @@ def patch_ui_cvar():
                 content = content.replace(anchor, decls + anchor, 1)
                 with open(ui_local_path, "w", encoding="utf-8") as f:
                     f.write(content)
-                print(f"[PATCHED] ui_local.h: {len(AIM_CVAR_SUFFIXES)} extern decls added")
+                print(f"[PATCHED] ui_local.h: {len(AIM_CVAR_SUFFIXES)} extern decls")
 
     ui_main_path = None
     for root, _dirs, files in os.walk("code"):
@@ -232,7 +218,7 @@ def patch_ui_cvar():
                 for sfx in AIM_CVAR_SUFFIXES
             )
             content = content.replace(anchor, decls + anchor, 1)
-            print(f"[PATCHED] ui_main.c: {len(AIM_CVAR_SUFFIXES)} vmCvar_t decls added")
+            print(f"[PATCHED] ui_main.c: {len(AIM_CVAR_SUFFIXES)} vmCvar_t decls")
 
     if '"cg_handheldAutoSwitch"' not in content:
         anchor = '\t{ &ui_brassTime, "cg_brassTime", "2500", CVAR_ARCHIVE },'
@@ -241,16 +227,16 @@ def patch_ui_cvar():
                 '\n\t{ &ui_handheldAimAssist, "cg_handheldAimAssist", "1", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistFire, "cg_handheldAimAssistFire", "1", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistAngle, "cg_handheldAimAssistAngle", "22", CVAR_ARCHIVE },'
-                '\n\t{ &ui_handheldAimAssistStrength, "cg_handheldAimAssistStrength", "0.75", CVAR_ARCHIVE },'
+                '\n\t{ &ui_handheldAimAssistStrength, "cg_handheldAimAssistStrength", "0.55", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistFriction, "cg_handheldAimAssistFriction", "0.92", CVAR_ARCHIVE },'
-                '\n\t{ &ui_handheldAimAssistPitch, "cg_handheldAimAssistPitch", "0.85", CVAR_ARCHIVE },'
+                '\n\t{ &ui_handheldAimAssistPitch, "cg_handheldAimAssistPitch", "0.80", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistLead, "cg_handheldAimAssistLead", "0", CVAR_ARCHIVE },'
-                '\n\t{ &ui_handheldAimAssistSticky, "cg_handheldAimAssistSticky", "18", CVAR_ARCHIVE },'
+                '\n\t{ &ui_handheldAimAssistSticky, "cg_handheldAimAssistSticky", "15", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistMaxDist, "cg_handheldAimAssistMaxDist", "3000", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistLOS, "cg_handheldAimAssistLOS", "1", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistUnlaggedSync, "cg_handheldAimAssistUnlaggedSync", "0", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistInterpolate, "cg_handheldAimAssistInterpolate", "1", CVAR_ARCHIVE },'
-                '\n\t{ &ui_handheldAimAssistSnapAngle, "cg_handheldAimAssistSnapAngle", "8", CVAR_ARCHIVE },'
+                '\n\t{ &ui_handheldAimAssistSnapAngle, "cg_handheldAimAssistSnapAngle", "5", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistZoom, "cg_handheldAimAssistZoom", "1", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistZoomNear, "cg_handheldAimAssistZoomNear", "100", CVAR_ARCHIVE },'
                 '\n\t{ &ui_handheldAimAssistZoomFar, "cg_handheldAimAssistZoomFar", "800", CVAR_ARCHIVE },'
@@ -262,16 +248,13 @@ def patch_ui_cvar():
                 '\n\t{ &ui_handheldAimPreset, "cg_handheldAimPreset", "0", CVAR_ARCHIVE },'
             )
             content = content.replace(anchor, anchor + entries, 1)
-            print("[PATCHED] ui_main.c: 22 cvarTable entries added")
+            print("[PATCHED] ui_main.c: 22 cvarTable entries")
 
     with open(ui_main_path, "w", encoding="utf-8") as f:
         f.write(content)
     return True
 
 
-# ============================================================================
-# AIM-ASSIST (cl_input.c) -- v11.9 mit Smart-LOS + Respawn-Reset
-# ============================================================================
 def patch_aim_assist():
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -289,7 +272,8 @@ def patch_aim_assist():
 
     helper_code = r"""
 /* ============================================================
- * [PATCHED v11.9] Handheld Aim Assist mit Smart-LOS + Respawn-Reset
+ * [PATCHED v12.0] Handheld Aim Assist
+ * FIX: Overshoot-Schutz (Pull-Cap 0.60/0.85) + Snapshot-Age immer
  * ============================================================ */
 #include <math.h>
 
@@ -310,6 +294,9 @@ def patch_aim_assist():
 #define HHA_LOS_CACHE_MS    150
 #define HHA_LOS_BUDGET        4
 #define HHA_MAX_CANDIDATES   32
+#define HHA_PULL_CAP_NORMAL 0.60f
+#define HHA_PULL_CAP_SNAP   0.85f
+#define HHA_CVAR_RECHECK_MS 1000
 
 typedef struct {
     qboolean enabled;
@@ -354,6 +341,7 @@ static vec3_t   hha_cachedDir    = { 0, 0, 0 };
 static qboolean hha_cachedValid  = qfalse;
 static int      hha_losChecksThisFrame = 0;
 static int      hha_lastSpawnCount = -1;
+static int      hha_lastCvarCheck = 0;
 
 static void HHA_ReadConfig( hha_config_t *cfg ) {
     float angle    = Cvar_VariableValue("cg_handheldAimAssistAngle");
@@ -434,17 +422,19 @@ static qboolean HHA_HasLineOfSight( int entNum, const vec3_t fromFeet, const vec
 static void HHA_GetPredictedPos( const entityState_t *ent, const hha_config_t *cfg, vec3_t out ) {
     float dt = 0.0f;
 
-    if ( cfg->interpolate ) {
+    {
         float snapAgeMs = (float)( cl.serverTime - cl.snap.serverTime );
-        if ( snapAgeMs < 0.0f ) snapAgeMs = 0.0f;
+        if ( snapAgeMs < 0.0f )   snapAgeMs = 0.0f;
         if ( snapAgeMs > 200.0f ) snapAgeMs = 200.0f;
         dt += snapAgeMs * 0.001f;
     }
+
     if ( cfg->unlaggedSync && cl.snap.ping > 0 ) {
         float pingLead = (float)cl.snap.ping * 0.0005f;
         if ( pingLead > 0.15f ) pingLead = 0.15f;
         dt += pingLead;
     }
+
     if ( cfg->leadTime > 0.0f ) dt += cfg->leadTime;
 
     out[0] = ent->pos.trBase[0] + ent->pos.trDelta[0] * dt;
@@ -498,7 +488,7 @@ static int HHA_FindTarget( const hha_config_t *cfg, vec3_t bestDir, float *bestA
         angle = acosf( dot ) * ( 180.0f / HHA_PI );
 
         if ( ent->number == hha_lastTargetNum && angle < cfg->angle + 8.0f ) {
-            angle *= 0.50f;
+            angle *= 0.60f;
         }
 
         if ( angle < cfg->angle ) {
@@ -559,13 +549,21 @@ static void HHA_UpdateCachedTarget( const hha_config_t *cfg ) {
     }
 }
 
-static void CL_HandheldReassertCvars( int spawnCount ) {
-    static int lastReassert = -1;
-    if ( lastReassert == spawnCount ) return;
-    lastReassert = spawnCount;
+static void CL_HandheldEnsureCvars( void ) {
+    if ( cl.serverTime - hha_lastCvarCheck < HHA_CVAR_RECHECK_MS ) return;
+    hha_lastCvarCheck = cl.serverTime;
 
     if ( Cvar_VariableIntegerValue("cg_handheldAimAssist") == 0 ) {
         Cvar_Set( "cg_handheldAimAssist", "1" );
+    }
+    if ( Cvar_VariableIntegerValue("cg_handheldAutoSwitch") == 0 ) {
+        Cvar_Set( "cg_handheldAutoSwitch", "1" );
+    }
+    if ( Cvar_VariableIntegerValue("cg_handheldHitMarker") == 0 ) {
+        Cvar_Set( "cg_handheldHitMarker", "1" );
+    }
+    if ( Cvar_VariableIntegerValue("cg_handheldDamageIndicator") == 0 ) {
+        Cvar_Set( "cg_handheldDamageIndicator", "1" );
     }
 }
 
@@ -574,6 +572,8 @@ static void CL_HandheldUpdateTarget( void ) {
     int curSpawn;
 
     hha_losChecksThisFrame = 0;
+
+    CL_HandheldEnsureCvars();
 
     curSpawn = cl.snap.ps.persistant[PERS_SPAWN_COUNT];
     if ( curSpawn != hha_lastSpawnCount ) {
@@ -586,7 +586,6 @@ static void CL_HandheldUpdateTarget( void ) {
         for ( i = 0; i < HHA_LOS_CACHE_SIZE; i++ ) {
             hha_los_cache[i].valid = qfalse;
         }
-        CL_HandheldReassertCvars( curSpawn );
     }
 
     HHA_ReadConfig( &cfg );
@@ -632,8 +631,9 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
     hha_config_t cfg;
     vec3_t forward, targetAngles;
     float  dot, currentAngle, yawDiff, pitchDiff, strength;
-    float  magYaw, magPitch;
+    float  magYaw, magPitch, pullYaw, pullPitch, cap;
     qboolean firing;
+    qboolean inSnap;
 
     HHA_ReadConfig( &cfg );
     if ( !cfg.enabled ) return;
@@ -651,9 +651,10 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
     if ( firing ) { magYaw = cfg.fireYaw; magPitch = cfg.firePitch; }
     else           { magYaw = cfg.strengthYaw; magPitch = cfg.strengthPitch; }
 
-    if ( currentAngle <= cfg.snapAngle && cfg.snapAngle > 0.0f ) {
-        magYaw *= 3.5f;
-        magPitch *= 3.5f;
+    inSnap = ( currentAngle <= cfg.snapAngle && cfg.snapAngle > 0.0f );
+    if ( inSnap ) {
+        magYaw   *= 2.0f;
+        magPitch *= 2.0f;
     }
 
     vectoangles( hha_cachedDir, targetAngles );
@@ -672,8 +673,17 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
         if ( strength < 0.0f ) strength = 0.0f;
     }
 
-    cl.viewangles[YAW]   += yawDiff   * magYaw   * strength;
-    cl.viewangles[PITCH] += pitchDiff * magPitch * strength;
+    pullYaw   = magYaw   * strength;
+    pullPitch = magPitch * strength;
+
+    cap = inSnap ? HHA_PULL_CAP_SNAP : HHA_PULL_CAP_NORMAL;
+    if ( pullYaw   >  cap ) pullYaw   =  cap;
+    if ( pullYaw   < -cap ) pullYaw   = -cap;
+    if ( pullPitch >  cap ) pullPitch =  cap;
+    if ( pullPitch < -cap ) pullPitch = -cap;
+
+    cl.viewangles[YAW]   += yawDiff   * pullYaw;
+    cl.viewangles[PITCH] += pitchDiff * pullPitch;
 }
 /* ============================================================ */
 """
@@ -701,20 +711,16 @@ static void CL_HandheldAimMagnetism( usercmd_t *cmd ) {
         print("[WARN] CL_CreateCmd not found")
     else:
         content = createcmd_pat.sub(
-            r'\1\n\t/* [PATCHED v11.9] Smart-LOS Cache + Respawn-Reset */\n'
-            r'\tCL_HandheldUpdateTarget();\n',
+            r'\1\n\tCL_HandheldUpdateTarget();\n',
             content, count=1)
-        print("[PATCHED] Smart-LOS + Respawn-Reset in CL_CreateCmd eingefuegt")
+        print("[PATCHED] Cache + Respawn + Cvar-Recheck in CL_CreateCmd")
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"[PATCHED] Aim assist v11.9 in {target_file}")
+    print(f"[PATCHED] Aim assist v12.0 in {target_file}")
     return True
 
 
-# ============================================================================
-# cg_view.c: Dynamic Zoom (EIGENER SCAN!) + Auto-Weapon-Switcher
-# ============================================================================
 def patch_cg_view():
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -722,7 +728,7 @@ def patch_cg_view():
             target_file = os.path.join(root, "cg_view.c")
             break
     if not target_file or not os.path.exists(target_file):
-        print("[WARN] cg_view.c not found - skipping cg_view patches")
+        print("[WARN] cg_view.c not found")
         return False
 
     with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
@@ -730,20 +736,12 @@ def patch_cg_view():
 
     zoom_helper = r"""
 /* ============================================================
- * [PATCHED v11.9] Dynamic Zoom - DIREKTER Cgame-Scan
- * ------------------------------------------------------------
- * Unabhaengig von der Client-Bridge. Scannt die Entities im Cgame
- * selbst und berechnet die Distanz zum naechsten Ziel. Damit
- * funktioniert Zoom auch dann, wenn die Client-Aim-Assist-Bridge
- * aus irgendeinem Grund keine Daten liefert.
+ * [PATCHED v12.0] Dynamic Zoom + Auto-Switch
  * ============================================================ */
 static float cg_hhaZoomCurrent  = 0.0f;
 static int   cg_hhaZoomLastTime = 0;
 static int   cg_hhaZoomLastSpawnCount = -1;
 
-/* Findet die Distanz zum naechsten Spieler im Kegel.
- * Nutzt einen weiten Winkel (nicht den Aim-Cone), weil Zoom
- * auch dann greifen soll, wenn der Gegner am Rand des Fadenkreuzes ist. */
 static float CG_HandheldScanNearestTarget( void ) {
     float  bestDistSq = 0.0f;
     vec3_t forward, toEnt;
@@ -759,21 +757,18 @@ static float CG_HandheldScanNearestTarget( void ) {
 
     for ( i = 0; i < cg.snap->numEntities; i++ ) {
         entityState_t *ent = &cg.snap->entities[i];
-        float dx, dy, dz, distSq, dot, angle;
+        float dx, dy, dz, distSq, dot;
         vec3_t entPos;
 
         if ( ent->eType != ET_PLAYER ) continue;
         if ( ent->number == cg.snap->ps.clientNum ) continue;
         if ( ent->eFlags & EF_DEAD ) continue;
 
-        /* Position aus Snapshot (keine Prediction, nur Rohdaten) */
-        entPos[0] = ent->pos.trBase[0];
-        entPos[1] = ent->pos.trBase[1];
-        entPos[2] = ent->pos.trBase[2];
+        VectorCopy( ent->pos.trBase, entPos );
 
-        dx = entPos[0] - cg.snap->ps.origin[0];
-        dy = entPos[1] - cg.snap->ps.origin[1];
-        dz = entPos[2] - cg.snap->ps.origin[2];
+        dx = entPos[0] - cg.refdef.vieworg[0];
+        dy = entPos[1] - cg.refdef.vieworg[1];
+        dz = entPos[2] - cg.refdef.vieworg[2];
         distSq = dx*dx + dy*dy + dz*dz;
 
         if ( distSq < 48.0f * 48.0f ) continue;
@@ -783,10 +778,7 @@ static float CG_HandheldScanNearestTarget( void ) {
         VectorNormalize( toEnt );
 
         dot = DotProduct( forward, toEnt );
-        if ( dot < 0.3f ) continue;  /* ca. 72 Grad Kegel */
-
-        angle = acosf( dot ) * ( 180.0f / M_PI );
-        (void)angle;
+        if ( dot < 0.3f ) continue;
 
         if ( best == NULL || distSq < bestDistSq ) {
             best = ent;
@@ -823,7 +815,6 @@ static void CG_HandheldApplyZoom( void ) {
         return;
     }
 
-    /* [v11.9] Eigener Scan statt Bridge-Cvar */
     dist      = CG_HandheldScanNearestTarget();
     nearDist  = trap_Cvar_VariableValue("cg_handheldAimAssistZoomNear");
     farDist   = trap_Cvar_VariableValue("cg_handheldAimAssistZoomFar");
@@ -866,9 +857,6 @@ static void CG_HandheldApplyZoom( void ) {
     }
 }
 
-/* ============================================================
- * [PATCHED v11.9] Auto-Weapon-Switcher
- * ============================================================ */
 static int cg_hhaLastSwitchTime = 0;
 static int cg_hhaSwitchLastSpawnCount = -1;
 
@@ -956,7 +944,7 @@ static void CG_HandheldAutoSwitch( void ) {
     if "CG_HandheldApplyZoom" not in content:
         calc_anchor_pat = re.compile(r'(/\*\s*\n=+\s*\nCG_CalcFov\s*\n)')
         if not calc_anchor_pat.search(content):
-            print("[WARN] CG_CalcFov comment anchor not found in cg_view.c")
+            print("[WARN] CG_CalcFov comment anchor not found")
             return False
         content = calc_anchor_pat.sub(lambda m: zoom_helper + m.group(1),
                                       content, count=1)
@@ -965,22 +953,20 @@ static void CG_HandheldAutoSwitch( void ) {
             r'(cg\.refdef\.fov_x\s*=\s*fov_x\s*;\s*\n'
             r'\s*cg\.refdef\.fov_y\s*=\s*fov_y\s*;)')
         if not fov_set_pat.search(content):
-            print("[WARN] FOV assignment anchor not found in CG_CalcFov")
+            print("[WARN] FOV assignment anchor not found")
             return False
         content = fov_set_pat.sub(
-            r'\1\n\n\t/* [PATCHED v11.9] Dynamic Zoom */\n\tCG_HandheldApplyZoom();',
+            r'\1\n\n\tCG_HandheldApplyZoom();',
             content, count=1)
-        print("[PATCHED] Dynamic Zoom hook inserted into CG_CalcFov")
+        print("[PATCHED] Dynamic Zoom hook in CG_CalcFov")
 
     setucv_pat = re.compile(
         r'(\n[ \t]*trap_SetUserCmdValue\s*\(\s*cg\.weaponSelect\s*,\s*cg\.zoomSensitivity\s*\)\s*;)')
     if setucv_pat.search(content):
         content = setucv_pat.sub(
-            r'\n\n\t/* [PATCHED v11.9] Auto-Weapon-Switcher */\n'
-            r'\tCG_HandheldAutoSwitch();\n'
-            r'\1',
+            r'\n\n\tCG_HandheldAutoSwitch();\n\1',
             content, count=1)
-        print("[PATCHED] Auto-Switch hook inserted before trap_SetUserCmdValue()")
+        print("[PATCHED] Auto-Switch hook before trap_SetUserCmdValue()")
     else:
         print("[WARN] trap_SetUserCmdValue anchor not found")
 
@@ -989,9 +975,6 @@ static void CG_HandheldAutoSwitch( void ) {
     return True
 
 
-# ============================================================================
-# cg_draw.c: Hitmarker + Damage-Indicator + Hook in CG_DrawActive
-# ============================================================================
 def patch_cg_hitmarker():
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -999,7 +982,7 @@ def patch_cg_hitmarker():
             target_file = os.path.join(root, "cg_draw.c")
             break
     if not target_file or not os.path.exists(target_file):
-        print("[WARN] cg_draw.c not found - skipping Hitmarker")
+        print("[WARN] cg_draw.c not found")
         return False
     with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
@@ -1009,7 +992,7 @@ def patch_cg_hitmarker():
 
     hitmarker_code = r"""
 /* ============================================================
- * [PATCHED v11.9] Hitmarker + Damage-Richtungsanzeige
+ * [PATCHED v12.0] Hitmarker + Damage-Indicator
  * ============================================================ */
 static int cg_hhaHitMarkerTime = 0;
 
@@ -1077,7 +1060,6 @@ void CG_DrawDamageIndicator( void ) {
     trap_R_SetColor( NULL );
 }
 
-/* [v11.9] All-in-one Hook, wird aus CG_DrawActive aufgerufen */
 void CG_HandheldDrawOverlays( void ) {
     CG_DrawHitMarker();
     CG_DrawDamageIndicator();
@@ -1086,36 +1068,27 @@ void CG_HandheldDrawOverlays( void ) {
 
 """
 
-    # Helper am Anfang der Datei einfuegen (nach dem Include)
     inc_pat = re.compile(r'(#include\s+"cg_local\.h"\s*\n)')
     if inc_pat.search(content):
         content = inc_pat.sub(lambda m: m.group(1) + "\n" + hitmarker_code,
                               content, count=1)
-        print("[PATCHED] Hitmarker helper after cg_local.h include")
     else:
-        print("[WARN] cg_local.h include not found in cg_draw.c")
+        print("[WARN] cg_local.h include not found")
         return False
 
-    # FIX v11.9: Hook in CG_DrawActive nach CG_Draw2D
     draw2d_call_pat = re.compile(
         r'(\n[ \t]*CG_Draw2D\s*\(\s*stereoView\s*\)\s*;)')
     if draw2d_call_pat.search(content):
         content = draw2d_call_pat.sub(
-            r'\1\n\n\t/* [PATCHED v11.9] Hitmarker + Damage-Indicator */\n'
-            r'\tCG_HandheldDrawOverlays();',
+            r'\1\n\n\tCG_HandheldDrawOverlays();',
             content, count=1)
-        print("[PATCHED] Hitmarker/Damage-Indicator hook after CG_Draw2D() in CG_DrawActive")
-    else:
-        print("[WARN] CG_Draw2D(stereoView) call not found in cg_draw.c")
+        print("[PATCHED] Hitmarker hook after CG_Draw2D() in CG_DrawActive")
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
     return True
 
 
-# ============================================================================
-# cg_event.c: Hitmarker-Event
-# ============================================================================
 def patch_cg_event_hit():
     target_file = None
     for root, _dirs, files in os.walk("code"):
@@ -1123,7 +1096,7 @@ def patch_cg_event_hit():
             target_file = os.path.join(root, "cg_event.c")
             break
     if not target_file or not os.path.exists(target_file):
-        print("[WARN] cg_event.c not found - skipping hit event hook")
+        print("[WARN] cg_event.c not found")
         return False
     with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
@@ -1131,43 +1104,35 @@ def patch_cg_event_hit():
         print("[SKIP] Hit event hook already present")
         return True
 
-    decls = ("\n/* [PATCHED v11.9] Externer Hitmarker-Helper */\n"
-             "void CG_RegisterHitMarker( void );\n\n")
+    decls = ("\nvoid CG_RegisterHitMarker( void );\n\n")
     inc_pat = re.compile(r'(#include\s+"cg_local\.h"\s*\n)')
     if inc_pat.search(content):
         content = inc_pat.sub(lambda m: m.group(1) + decls, content, count=1)
-        print("[PATCHED] cg_event.c: extern decl added")
 
     bullet_case = re.compile(
         r'(case\s+EV_BULLET_HIT_FLESH\s*:\s*\n'
         r'\s*DEBUGNAME\s*\(\s*"EV_BULLET_HIT_FLESH"\s*\)\s*;)')
     if bullet_case.search(content):
         content = bullet_case.sub(
-            r'\1\n\t\t/* [PATCHED v11.9] Hitmarker */\n'
-            r'\t\tif ( es->otherEntityNum == cg.snap->ps.clientNum &&\n'
-            r'\t\t     es->eventParm != cg.snap->ps.clientNum ) {\n'
+            r'\1\n\t\tif ( es->otherEntityNum == cg.snap->ps.clientNum &&\n'
+            r'\t\t     es->eventParm != cg.snap->ps.clientNum &&\n'
+            r'\t\t     !(cg_entities[es->eventParm].currentState.eFlags & EF_DEAD) ) {\n'
             r'\t\t\tCG_RegisterHitMarker();\n'
             r'\t\t}',
             content, count=1)
         print("[PATCHED] Hitmarker event hook on EV_BULLET_HIT_FLESH")
-    else:
-        print("[WARN] EV_BULLET_HIT_FLESH case not found")
 
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
     return True
 
 
-# ============================================================================
-# settings_options.menu
-# ============================================================================
 def write_settings_options_menu(menu_dir):
     path = os.path.join(menu_dir, "settings_options.menu")
     content = """#include "ui/menudef.h"
 #define ROW1 80
 #define ROW2 330
 #define ROW3 200
-
 {
 menuDef {
 	name "options_menu"
@@ -1178,484 +1143,38 @@ menuDef {
 	style 1
 	border 1
 	onEsc { close options_menu ; close setup_menu ; open main }
-
-itemDef {
-	name window
-	group grpControlbutton
-	rect 2 2 632 371
-	style WINDOW_STYLE_FILLED
-	border 1
-	bordercolor .5 .5 .5 .5
-	forecolor 1 1 1 1
-	backcolor 0 0 0 .5
-	visible 1
-	decoration
-}
-
-itemDef {
-	name other
-	style 1
-	text "Game"
-	rect 80 35 128 20
-	textalign ITEM_ALIGN_CENTER
-	textalignx 64
-	textaligny 20
-	textscale .3
-	forecolor 1 .75 0 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name options
-	group grpOptions
-	text "Crosshair:"
-	rect 208 55 18 18
-	ownerdraw UI_CROSSHAIR
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 0
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Identify Target:"
-	cvar "cg_drawCrosshairNames"
-	rect ROW1 75 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Auto Download:"
-	cvar "cl_allowDownload"
-	rect ROW1 95 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Show FPS:"
-	cvar "cg_drawfps"
-	rect ROW1 115 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Show Time:"
-	cvar "cg_drawTimer"
-	rect ROW1 135 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Taunts Off:"
-	cvar "cg_noTaunt"
-	rect ROW1 155 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Team Chats Only:"
-	cvar "cg_teamChatsOnly"
-	rect ROW1 175 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "In Game Video:"
-	cvar "r_inGameVideo"
-	rect ROW1 195 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Show Hit Message(Target):"
-	cvar "cg_hitmsg"
-	rect ROW1 215 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Show Hit Message(Myself):"
-	cvar "cg_ownhitmsg"
-	rect ROW1 235 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Play Own Flysound:"
-	cvar "cg_flysound"
-	rect ROW1 255 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name other
-	style 1
-	text "Performance"
-	rect 330 35 128 20
-	textalign ITEM_ALIGN_CENTER
-	textalignx 64
-	textaligny 20
-	textscale .3
-	forecolor 1 .75 0 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Simple Items:"
-	cvar "cg_simpleItems"
-	rect ROW2 55 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Marks On Walls:"
-	cvar "cg_marks"
-	rect ROW2 75 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Dynamic Lights:"
-	cvar "r_dynamiclight"
-	rect ROW2 95 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Additional Guns:"
-	cvar "cg_addguns"
-	rect ROW2 115 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Detailed Gunsmoke:"
-	cvar "cg_gunsmoke"
-	rect ROW2 135 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_MULTI
-	text "Particles:"
-	cvar "cg_impactparticles"
-	cvarFloatList { "None" 0 "Few" 1 "Normal" 2 }
-	rect ROW2 155 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Low Quality Sky:"
-	cvar "r_fastsky"
-	rect ROW2 175 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Sync Every Frame:"
-	cvar "weapon 5"
-	rect ROW2 195 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Force Player Models:"
-	cvar "cg_forceModel"
-	rect ROW2 215 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Glowing Flares:"
-	cvar "cg_glowflares"
-	rect ROW2 235 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Boost FPS:"
-	cvar "cg_boostfps"
-	rect ROW2 255 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_BUTTON
-	text "Handheld Aim Assist..."
-	rect ROW2 275 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 .75 0 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		close options_menu ;
-		open aim_assist_menu }
-}
-
-itemDef {
-	name other
-	style 1
-	text "Misc"
-	rect ROW3 285 128 20
-	textalign ITEM_ALIGN_CENTER
-	textalignx 64
-	textaligny 20
-	textscale .3
-	forecolor 1 .75 0 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Limit FPS when minimized:"
-	cvar "com_maxfpsMinimized"
-	rect ROW1 305 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Mute sound when minimized:"
-	cvar "s_muteWhenMinimized"
-	rect ROW1 325 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Limit FPS when unfocused:"
-	cvar "com_maxfpsUnfocused"
-	rect ROW2 305 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Mute sound when unfocused:"
-	cvar "s_muteWhenUnfocused"
-	rect ROW2 325 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name options
-	group grpOptions
-	type ITEM_TYPE_YESNO
-	text "Allow window resizing:"
-	cvar "r_allowResize"
-	rect ROW3 345 192 18
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 128
-	textaligny 20
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
+itemDef { name window group grpControlbutton rect 2 2 632 371 style WINDOW_STYLE_FILLED border 1 bordercolor .5 .5 .5 .5 forecolor 1 1 1 1 backcolor 0 0 0 .5 visible 1 decoration }
+itemDef { name other style 1 text "Game" rect 80 35 128 20 textalign ITEM_ALIGN_CENTER textalignx 64 textaligny 20 textscale .3 forecolor 1 .75 0 1 visible 1 decoration }
+itemDef { name options group grpOptions text "Crosshair:" rect 208 55 18 18 ownerdraw UI_CROSSHAIR textalign ITEM_ALIGN_RIGHT textalignx 0 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Identify Target:" cvar "cg_drawCrosshairNames" rect ROW1 75 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Auto Download:" cvar "cl_allowDownload" rect ROW1 95 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Show FPS:" cvar "cg_drawfps" rect ROW1 115 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Show Time:" cvar "cg_drawTimer" rect ROW1 135 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Taunts Off:" cvar "cg_noTaunt" rect ROW1 155 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Team Chats Only:" cvar "cg_teamChatsOnly" rect ROW1 175 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "In Game Video:" cvar "r_inGameVideo" rect ROW1 195 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Show Hit Message(Target):" cvar "cg_hitmsg" rect ROW1 215 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Show Hit Message(Myself):" cvar "cg_ownhitmsg" rect ROW1 235 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Play Own Flysound:" cvar "cg_flysound" rect ROW1 255 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name other style 1 text "Performance" rect 330 35 128 20 textalign ITEM_ALIGN_CENTER textalignx 64 textaligny 20 textscale .3 forecolor 1 .75 0 1 visible 1 decoration }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Simple Items:" cvar "cg_simpleItems" rect ROW2 55 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Marks On Walls:" cvar "cg_marks" rect ROW2 75 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Dynamic Lights:" cvar "r_dynamiclight" rect ROW2 95 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Additional Guns:" cvar "cg_addguns" rect ROW2 115 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Detailed Gunsmoke:" cvar "cg_gunsmoke" rect ROW2 135 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_MULTI text "Particles:" cvar "cg_impactparticles" cvarFloatList { "None" 0 "Few" 1 "Normal" 2 } rect ROW2 155 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Low Quality Sky:" cvar "r_fastsky" rect ROW2 175 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Sync Every Frame:" cvar "weapon 5" rect ROW2 195 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Force Player Models:" cvar "cg_forceModel" rect ROW2 215 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Glowing Flares:" cvar "cg_glowflares" rect ROW2 235 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Boost FPS:" cvar "cg_boostfps" rect ROW2 255 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_BUTTON text "Handheld Aim Assist..." rect ROW2 275 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 .75 0 1 visible 1 action { play "sound/misc/menu3.wav" ; close options_menu ; open aim_assist_menu } }
+itemDef { name other style 1 text "Misc" rect ROW3 285 128 20 textalign ITEM_ALIGN_CENTER textalignx 64 textaligny 20 textscale .3 forecolor 1 .75 0 1 visible 1 decoration }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Limit FPS when minimized:" cvar "com_maxfpsMinimized" rect ROW1 305 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Mute sound when minimized:" cvar "s_muteWhenMinimized" rect ROW1 325 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Limit FPS when unfocused:" cvar "com_maxfpsUnfocused" rect ROW2 305 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Mute sound when unfocused:" cvar "s_muteWhenUnfocused" rect ROW2 325 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name options group grpOptions type ITEM_TYPE_YESNO text "Allow window resizing:" cvar "r_allowResize" rect ROW3 345 192 18 textalign ITEM_ALIGN_RIGHT textalignx 128 textaligny 20 textscale .28 forecolor 1 1 1 1 visible 1 }
 }
 }
 """
@@ -1665,9 +1184,6 @@ itemDef {
     return True
 
 
-# ============================================================================
-# MENU-DATEIEN + PRESETS
-# ============================================================================
 def write_menu_override():
     if not os.path.exists("Makefile"):
         return False
@@ -1677,9 +1193,7 @@ def write_menu_override():
 
     write_settings_options_menu(menu_dir)
 
-    # ---------- settings_aimassist.menu ----------
     aim_menu = """#include "ui/menudef.h"
-
 {
 menuDef {
 	name "aim_assist_menu"
@@ -1690,284 +1204,33 @@ menuDef {
 	style 1
 	border 1
 	onEsc { close aim_assist_menu ; open options_menu }
-
-itemDef {
-	name window
-	group grpAimButton
-	rect 2 2 632 371
-	style WINDOW_STYLE_FILLED
-	border 1
-	bordercolor .5 .5 .5 .5
-	forecolor 1 1 1 1
-	backcolor 0 0 0 .5
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_title
-	style 1
-	text "Handheld Aim Assist"
-	rect 180 5 280 18
-	textalign ITEM_ALIGN_CENTER
-	textalignx 140
-	textaligny 15
-	textscale .35
-	forecolor 1 .75 0 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_preset_status
-	group grpAim
-	type ITEM_TYPE_MULTI
-	text "Active Preset:"
-	cvar "cg_handheldAimPreset"
-	cvarFloatList { "Custom (manuell)" 0 "Online (Unlagged)" 1 "Offline (Bots)" 2 }
-	rect 60 28 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 15
-	textscale .28
-	forecolor 1 1 0.4 1
-	visible 1
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Handheld Aim Assist:"
-	cvar "cg_handheldAimAssist"
-	rect 60 52 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Fire Assist:"
-	cvar "cg_handheldAimAssistFire"
-	rect 60 74 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Aim Cone Angle:"
-	cvarfloat "cg_handheldAimAssistAngle" 22 5 45
-	rect 60 100 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Magnetism Strength:"
-	cvarfloat "cg_handheldAimAssistStrength" 0.75 0.05 1.20
-	rect 60 125 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Input Friction:"
-	cvarfloat "cg_handheldAimAssistFriction" 0.92 0.50 1.00
-	rect 60 150 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_hint_preset
-	style 1
-	text "--- Presets (setzen Active Preset oben) ---"
-	rect 180 178 280 14
-	textalign ITEM_ALIGN_CENTER
-	textalignx 140
-	textaligny 11
-	textscale .22
-	forecolor .7 .7 .7 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_BUTTON
-	text "Preset: Online (Unlagged)"
-	rect 220 198 200 22
-	textalign ITEM_ALIGN_CENTER
-	textalignx 100
-	textaligny 16
-	textscale .26
-	forecolor 1 .75 0 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		exec "preset_online.cfg" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_BUTTON
-	text "Preset: Offline (Bots)"
-	rect 220 222 200 22
-	textalign ITEM_ALIGN_CENTER
-	textalignx 100
-	textaligny 16
-	textscale .26
-	forecolor 1 .75 0 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		exec "preset_offline.cfg" }
-}
-
-itemDef {
-	name aim_hint_qol
-	style 1
-	text "--- Quality of Life ---"
-	rect 180 252 280 14
-	textalign ITEM_ALIGN_CENTER
-	textalignx 140
-	textaligny 11
-	textscale .22
-	forecolor .7 .7 .7 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Auto Weapon Switch:"
-	cvar "cg_handheldAutoSwitch"
-	rect 60 272 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Hit Marker:"
-	cvar "cg_handheldHitMarker"
-	rect 60 294 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Damage Direction:"
-	cvar "cg_handheldDamageIndicator"
-	rect 60 316 240 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 160
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_BUTTON
-	text "Advanced Options..."
-	rect 140 342 160 22
-	textalign ITEM_ALIGN_CENTER
-	textalignx 80
-	textaligny 16
-	textscale .28
-	forecolor 1 .75 0 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		close aim_assist_menu ;
-		open aim_assist_advanced_menu }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_BUTTON
-	text "Dynamic Zoom..."
-	rect 340 342 160 22
-	textalign ITEM_ALIGN_CENTER
-	textalignx 80
-	textaligny 16
-	textscale .28
-	forecolor 1 .75 0 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		close aim_assist_menu ;
-		open aim_assist_zoom_menu }
-}
-
+itemDef { name window group grpAimButton rect 2 2 632 371 style WINDOW_STYLE_FILLED border 1 bordercolor .5 .5 .5 .5 forecolor 1 1 1 1 backcolor 0 0 0 .5 visible 1 decoration }
+itemDef { name aim_title style 1 text "Handheld Aim Assist" rect 180 5 280 18 textalign ITEM_ALIGN_CENTER textalignx 140 textaligny 15 textscale .35 forecolor 1 .75 0 1 visible 1 decoration }
+itemDef { name aim_preset_status group grpAim type ITEM_TYPE_MULTI text "Active Preset:" cvar "cg_handheldAimPreset" cvarFloatList { "Custom" 0 "Online (Unlagged)" 1 "Offline (Bots)" 2 } rect 60 28 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 15 textscale .28 forecolor 1 1 0.4 1 visible 1 }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Handheld Aim Assist:" cvar "cg_handheldAimAssist" rect 60 52 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Fire Assist:" cvar "cg_handheldAimAssistFire" rect 60 74 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Aim Cone Angle:" cvarfloat "cg_handheldAimAssistAngle" 22 5 45 rect 60 100 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Magnetism Strength:" cvarfloat "cg_handheldAimAssistStrength" 0.55 0.05 1.20 rect 60 125 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Input Friction:" cvarfloat "cg_handheldAimAssistFriction" 0.92 0.50 1.00 rect 60 150 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_hint_preset style 1 text "--- Presets ---" rect 180 178 280 14 textalign ITEM_ALIGN_CENTER textalignx 140 textaligny 11 textscale .22 forecolor .7 .7 .7 1 visible 1 decoration }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Preset: Online (Unlagged)" rect 220 198 200 22 textalign ITEM_ALIGN_CENTER textalignx 100 textaligny 16 textscale .26 forecolor 1 .75 0 1 visible 1 action { play "sound/misc/menu3.wav" ; exec "preset_online.cfg" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Preset: Offline (Bots)" rect 220 222 200 22 textalign ITEM_ALIGN_CENTER textalignx 100 textaligny 16 textscale .26 forecolor 1 .75 0 1 visible 1 action { play "sound/misc/menu3.wav" ; exec "preset_offline.cfg" } }
+itemDef { name aim_hint_qol style 1 text "--- Quality of Life ---" rect 180 252 280 14 textalign ITEM_ALIGN_CENTER textalignx 140 textaligny 11 textscale .22 forecolor .7 .7 .7 1 visible 1 decoration }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Auto Weapon Switch:" cvar "cg_handheldAutoSwitch" rect 60 272 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Hit Marker:" cvar "cg_handheldHitMarker" rect 60 294 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Damage Direction:" cvar "cg_handheldDamageIndicator" rect 60 316 240 20 textalign ITEM_ALIGN_RIGHT textalignx 160 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Advanced Options..." rect 140 342 160 22 textalign ITEM_ALIGN_CENTER textalignx 80 textaligny 16 textscale .28 forecolor 1 .75 0 1 visible 1 action { play "sound/misc/menu3.wav" ; close aim_assist_menu ; open aim_assist_advanced_menu } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Dynamic Zoom..." rect 340 342 160 22 textalign ITEM_ALIGN_CENTER textalignx 80 textaligny 16 textscale .28 forecolor 1 .75 0 1 visible 1 action { play "sound/misc/menu3.wav" ; close aim_assist_menu ; open aim_assist_zoom_menu } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Back" rect 240 368 160 22 textalign ITEM_ALIGN_CENTER textalignx 80 textaligny 16 textscale .28 forecolor 1 1 1 1 visible 1 action { play "sound/misc/menu3.wav" ; close aim_assist_menu ; open options_menu } }
 }
 }
 """
-
     with open(os.path.join(menu_dir, "settings_aimassist.menu"),
               "w", encoding="utf-8") as f:
         f.write(aim_menu)
     print("[PATCHED] Menu: settings_aimassist.menu")
 
-    # ---------- settings_aimassist_advanced.menu ----------
     aim_adv = """#include "ui/menudef.h"
-
 {
 menuDef {
 	name "aim_assist_advanced_menu"
@@ -1978,199 +1241,26 @@ menuDef {
 	style 1
 	border 1
 	onEsc { close aim_assist_advanced_menu ; open aim_assist_menu }
-
-itemDef {
-	name window
-	group grpAimButton
-	rect 2 2 632 371
-	style WINDOW_STYLE_FILLED
-	border 1
-	bordercolor .5 .5 .5 .5
-	forecolor 1 1 1 1
-	backcolor 0 0 0 .5
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_title
-	style 1
-	text "Aim Assist - Advanced"
-	rect 200 10 240 20
-	textalign ITEM_ALIGN_CENTER
-	textalignx 120
-	textaligny 18
-	textscale .35
-	forecolor 1 .75 0 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Interpolate Position (online):"
-	cvar "cg_handheldAimAssistInterpolate"
-	rect 80 40 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 15
-	textscale .28
-	forecolor 1 .75 0 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Unlagged-Sync (NUR non-unlagged):"
-	cvar "cg_handheldAimAssistUnlaggedSync"
-	rect 80 65 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Manual Lead (ms):"
-	cvarfloat "cg_handheldAimAssistLead" 0 0 200
-	rect 80 90 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Pitch Strength Multiplier:"
-	cvarfloat "cg_handheldAimAssistPitch" 0.85 0.30 1.50
-	rect 80 115 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Sticky Target (frames):"
-	cvarfloat "cg_handheldAimAssistSticky" 18 0 30
-	rect 80 140 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Snap Angle (degrees):"
-	cvarfloat "cg_handheldAimAssistSnapAngle" 8 0 15
-	rect 80 165 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 .75 0 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Max Target Distance:"
-	cvarfloat "cg_handheldAimAssistMaxDist" 3000 500 8000
-	rect 80 190 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Line-of-Sight Check:"
-	cvar "cg_handheldAimAssistLOS"
-	rect 80 215 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 15
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssist"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_BUTTON
-	text "Back"
-	rect 220 250 200 24
-	textalign ITEM_ALIGN_CENTER
-	textalignx 100
-	textaligny 17
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		close aim_assist_advanced_menu ;
-		open aim_assist_menu }
-}
-
+itemDef { name window group grpAimButton rect 2 2 632 371 style WINDOW_STYLE_FILLED border 1 bordercolor .5 .5 .5 .5 forecolor 1 1 1 1 backcolor 0 0 0 .5 visible 1 decoration }
+itemDef { name aim_title style 1 text "Aim Assist - Advanced" rect 200 10 240 20 textalign ITEM_ALIGN_CENTER textalignx 120 textaligny 18 textscale .35 forecolor 1 .75 0 1 visible 1 decoration }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Interpolate Position:" cvar "cg_handheldAimAssistInterpolate" rect 80 40 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 15 textscale .28 forecolor 1 .75 0 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Unlagged-Sync (NUR non-unlagged):" cvar "cg_handheldAimAssistUnlaggedSync" rect 80 65 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Manual Lead (ms):" cvarfloat "cg_handheldAimAssistLead" 0 0 200 rect 80 90 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Pitch Strength Multiplier:" cvarfloat "cg_handheldAimAssistPitch" 0.80 0.30 1.50 rect 80 115 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Sticky Target (frames):" cvarfloat "cg_handheldAimAssistSticky" 15 0 30 rect 80 140 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Snap Angle (degrees):" cvarfloat "cg_handheldAimAssistSnapAngle" 5 0 15 rect 80 165 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 .75 0 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Max Target Distance:" cvarfloat "cg_handheldAimAssistMaxDist" 3000 500 8000 rect 80 190 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Line-of-Sight Check:" cvar "cg_handheldAimAssistLOS" rect 80 215 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 15 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssist" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Back" rect 220 250 200 24 textalign ITEM_ALIGN_CENTER textalignx 100 textaligny 17 textscale .28 forecolor 1 1 1 1 visible 1 action { play "sound/misc/menu3.wav" ; close aim_assist_advanced_menu ; open aim_assist_menu } }
 }
 }
 """
-
     with open(os.path.join(menu_dir, "settings_aimassist_advanced.menu"),
               "w", encoding="utf-8") as f:
         f.write(aim_adv)
     print("[PATCHED] Menu: settings_aimassist_advanced.menu")
 
-    # ---------- settings_aimassist_zoom.menu ----------
     aim_zoom = """#include "ui/menudef.h"
-
 {
 menuDef {
 	name "aim_assist_zoom_menu"
@@ -2181,193 +1271,42 @@ menuDef {
 	style 1
 	border 1
 	onEsc { close aim_assist_zoom_menu ; open aim_assist_menu }
-
-itemDef {
-	name window
-	group grpAimButton
-	rect 2 2 632 371
-	style WINDOW_STYLE_FILLED
-	border 1
-	bordercolor .5 .5 .5 .5
-	forecolor 1 1 1 1
-	backcolor 0 0 0 .5
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_title
-	style 1
-	text "Aim Assist - Dynamic Zoom"
-	rect 180 10 280 20
-	textalign ITEM_ALIGN_CENTER
-	textalignx 140
-	textaligny 18
-	textscale .35
-	forecolor 1 .75 0 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_YESNO
-	text "Enable Dynamic Zoom:"
-	cvar "cg_handheldAimAssistZoom"
-	rect 80 50 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 15
-	textscale .28
-	forecolor 1 .75 0 1
-	visible 1
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Zoom Near Distance:"
-	cvarfloat "cg_handheldAimAssistZoomNear" 100 50 1500
-	rect 80 80 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssistZoom"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Zoom Far Distance:"
-	cvarfloat "cg_handheldAimAssistZoomFar" 800 300 4000
-	rect 80 105 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssistZoom"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Target Zoom FOV:"
-	cvarfloat "cg_handheldAimAssistZoomFov" 45 25 85
-	rect 80 130 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssistZoom"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_SLIDER
-	text "Zoom Speed:"
-	cvarfloat "cg_handheldAimAssistZoomSpeed" 12 1 25
-	rect 80 155 220 20
-	textalign ITEM_ALIGN_RIGHT
-	textalignx 140
-	textaligny 12
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	cvarTest "cg_handheldAimAssistZoom"
-	disableCvar { "0" }
-}
-
-itemDef {
-	name aim_hint1
-	style 1
-	text "Zoom scannt Ziele selbstaendig im Cgame (nicht mehr Bridge-abhaengig)."
-	rect 60 185 520 14
-	textalign ITEM_ALIGN_CENTER
-	textalignx 260
-	textaligny 11
-	textscale .20
-	forecolor .7 .7 .7 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_hint2
-	style 1
-	text "Default: Near 100, Far 800, FOV 45, Speed 12."
-	rect 60 203 520 14
-	textalign ITEM_ALIGN_CENTER
-	textalignx 260
-	textaligny 11
-	textscale .20
-	forecolor .7 .7 .7 1
-	visible 1
-	decoration
-}
-
-itemDef {
-	name aim_options
-	group grpAim
-	type ITEM_TYPE_BUTTON
-	text "Back"
-	rect 220 225 200 24
-	textalign ITEM_ALIGN_CENTER
-	textalignx 100
-	textaligny 17
-	textscale .28
-	forecolor 1 1 1 1
-	visible 1
-	action { play "sound/misc/menu3.wav" ;
-		close aim_assist_zoom_menu ;
-		open aim_assist_menu }
-}
-
+itemDef { name window group grpAimButton rect 2 2 632 371 style WINDOW_STYLE_FILLED border 1 bordercolor .5 .5 .5 .5 forecolor 1 1 1 1 backcolor 0 0 0 .5 visible 1 decoration }
+itemDef { name aim_title style 1 text "Aim Assist - Dynamic Zoom" rect 180 10 280 20 textalign ITEM_ALIGN_CENTER textalignx 140 textaligny 18 textscale .35 forecolor 1 .75 0 1 visible 1 decoration }
+itemDef { name aim_options group grpAim type ITEM_TYPE_YESNO text "Enable Dynamic Zoom:" cvar "cg_handheldAimAssistZoom" rect 80 50 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 15 textscale .28 forecolor 1 .75 0 1 visible 1 }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Zoom Near Distance:" cvarfloat "cg_handheldAimAssistZoomNear" 100 50 1500 rect 80 80 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssistZoom" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Zoom Far Distance:" cvarfloat "cg_handheldAimAssistZoomFar" 800 300 4000 rect 80 105 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssistZoom" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Target Zoom FOV:" cvarfloat "cg_handheldAimAssistZoomFov" 45 25 85 rect 80 130 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssistZoom" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_SLIDER text "Zoom Speed:" cvarfloat "cg_handheldAimAssistZoomSpeed" 12 1 25 rect 80 155 220 20 textalign ITEM_ALIGN_RIGHT textalignx 140 textaligny 12 textscale .28 forecolor 1 1 1 1 visible 1 cvarTest "cg_handheldAimAssistZoom" disableCvar { "0" } }
+itemDef { name aim_options group grpAim type ITEM_TYPE_BUTTON text "Back" rect 220 210 200 24 textalign ITEM_ALIGN_CENTER textalignx 100 textaligny 17 textscale .28 forecolor 1 1 1 1 visible 1 action { play "sound/misc/menu3.wav" ; close aim_assist_zoom_menu ; open aim_assist_menu } }
 }
 }
 """
-
     with open(os.path.join(menu_dir, "settings_aimassist_zoom.menu"),
               "w", encoding="utf-8") as f:
         f.write(aim_zoom)
     print("[PATCHED] Menu: settings_aimassist_zoom.menu")
 
-    # ---------- preset_online.cfg ----------
     preset_online = """// Preset: Online (Unlagged Server)
-// Setzt auch cg_handheldAimPreset auf 1.
 seta cg_handheldAimPreset "1"
 seta cg_handheldAimAssist "1"
 seta cg_handheldAimAssistFire "1"
 seta cg_handheldAimAssistAngle "22"
-seta cg_handheldAimAssistStrength "0.75"
+seta cg_handheldAimAssistStrength "0.55"
 seta cg_handheldAimAssistFriction "0.92"
-seta cg_handheldAimAssistPitch "0.85"
-seta cg_handheldAimAssistSnapAngle "8"
-seta cg_handheldAimAssistSticky "18"
+seta cg_handheldAimAssistPitch "0.80"
+seta cg_handheldAimAssistSnapAngle "5"
+seta cg_handheldAimAssistSticky "15"
 seta cg_handheldAimAssistMaxDist "3000"
 seta cg_handheldAimAssistInterpolate "1"
 seta cg_handheldAimAssistUnlaggedSync "0"
 seta cg_handheldAimAssistLead "0"
 seta cg_handheldAimAssistLOS "1"
 seta cg_handheldAimAssistZoom "1"
-seta cg_handheldAimAssistZoomNear "200"
-seta cg_handheldAimAssistZoomFar "1500"
-seta cg_handheldAimAssistZoomFov "60"
-seta cg_handheldAimAssistZoomSpeed "8"
+seta cg_handheldAimAssistZoomNear "100"
+seta cg_handheldAimAssistZoomFar "800"
+seta cg_handheldAimAssistZoomFov "45"
+seta cg_handheldAimAssistZoomSpeed "12"
 echo "^2[Preset] ^7ONLINE (Unlagged) geladen"
 """
     with open(os.path.join(menu_dir, "preset_online.cfg"),
@@ -2375,18 +1314,16 @@ echo "^2[Preset] ^7ONLINE (Unlagged) geladen"
         f.write(preset_online)
     print("[PATCHED] Preset: preset_online.cfg")
 
-    # ---------- preset_offline.cfg ----------
     preset_offline = """// Preset: Offline (Bots)
-// Setzt auch cg_handheldAimPreset auf 2.
 seta cg_handheldAimPreset "2"
 seta cg_handheldAimAssist "1"
 seta cg_handheldAimAssistFire "1"
 seta cg_handheldAimAssistAngle "28"
-seta cg_handheldAimAssistStrength "1.10"
+seta cg_handheldAimAssistStrength "0.55"
 seta cg_handheldAimAssistFriction "0.85"
-seta cg_handheldAimAssistPitch "1.00"
-seta cg_handheldAimAssistSnapAngle "10"
-seta cg_handheldAimAssistSticky "20"
+seta cg_handheldAimAssistPitch "0.80"
+seta cg_handheldAimAssistSnapAngle "5"
+seta cg_handheldAimAssistSticky "15"
 seta cg_handheldAimAssistMaxDist "3000"
 seta cg_handheldAimAssistInterpolate "0"
 seta cg_handheldAimAssistUnlaggedSync "0"
@@ -2404,7 +1341,6 @@ echo "^2[Preset] ^7OFFLINE (Bots) geladen"
         f.write(preset_offline)
     print("[PATCHED] Preset: preset_offline.cfg")
 
-    # ---------- menus.txt ----------
     menus = """// menu defs
 // 
 {	
@@ -2439,7 +1375,6 @@ echo "^2[Preset] ^7OFFLINE (Bots) geladen"
 	loadMenu { "ui/pop_sound_restart.menu" }
 }
 """
-
     with open(os.path.join(menu_dir, "menus.txt"),
               "w", encoding="utf-8") as f:
         f.write(menus)
@@ -2448,9 +1383,6 @@ echo "^2[Preset] ^7OFFLINE (Bots) geladen"
     return True
 
 
-# ============================================================================
-# MAIN
-# ============================================================================
 def main():
     is_smokinguns = os.path.exists("Makefile")
     is_sdl12_compat = os.path.exists(os.path.join("src", "SDL12_compat.c"))
@@ -2459,7 +1391,7 @@ def main():
         sys.exit(1)
     applied = 0
     if is_smokinguns:
-        print("==> Patching SmokinGuns (v11.9)")
+        print("==> Patching SmokinGuns (v12.0)")
         diagnostic_dump()
         if patch_makefile(): applied += 1
         patch_q_platform()
