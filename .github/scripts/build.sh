@@ -54,14 +54,26 @@ which aarch64-linux-gnu-gcc
 aarch64-linux-gnu-gcc --version | head -1
 
 # ------------------------------------------------------------
-# 3. Umgebungsvariablen
+# 3. Umgebungsvariablen - OPTIMIERT FUER CORTEX-A35
+#    Alle urspruenglichen Flags bleiben erhalten.
+#    Neu hinzugefuegte Flags sind am Ende des OPTIMIZE-Blocks.
 # ------------------------------------------------------------
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
 -fno-math-errno -fno-trapping-math -fno-semantic-interposition \
 -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector \
 -fno-asynchronous-unwind-tables -fmerge-all-constants \
--falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon"
+-falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon \
+-mfpu=neon-fp-armv8 \
+-falign-jumps=16 -falign-labels=16 \
+-fvect-cost-model=unlimited \
+-fprefetch-loop-arrays \
+-fgcse-after-reload \
+-fipa-cp-clone \
+-fpeel-loops \
+-fpredictive-commoning \
+-fsplit-paths \
+-ftree-loop-distribute-patterns"
 export LDFLAGS="-Wl,-O1 -Wl,--as-needed"
 
 export SRC_DIR="/work/src"
