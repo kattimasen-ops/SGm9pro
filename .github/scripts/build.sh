@@ -56,7 +56,9 @@ aarch64-linux-gnu-gcc --version | head -1
 # ------------------------------------------------------------
 # 3. Umgebungsvariablen - OPTIMIERT FUER CORTEX-A35
 #    Alle urspruenglichen Flags bleiben erhalten.
-#    Neu hinzugefuegte Flags sind am Ende des OPTIMIZE-Blocks.
+#    Hinweis: KEIN -mfpu=* auf AArch64 - NEON ist architektonisch
+#    verpflichtend und wird durch -mcpu=cortex-a35 implizit aktiviert.
+#    -O3 -ftree-vectorize steuern die automatische NEON-Vektorisierung.
 # ------------------------------------------------------------
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
@@ -64,7 +66,6 @@ export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -fno-plt -fno-exceptions -fno-rtti -fno-stack-protector \
 -fno-asynchronous-unwind-tables -fmerge-all-constants \
 -falign-functions=16 -falign-loops=16 -DNDEBUG -w -fcommon \
--mfpu=neon-fp-armv8 \
 -falign-jumps=16 -falign-labels=16 \
 -fvect-cost-model=unlimited \
 -fprefetch-loop-arrays \
@@ -100,18 +101,27 @@ export PATH=/opt/cmake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 cmake --version
 
 # ------------------------------------------------------------
-# 5. Toolchain-File erzeugen
+# 5. Toolchain-File erzeugen (Multiarch-korrekt)
+#
+# KEIN CMAKE_FIND_ROOT_PATH: Bei Ubuntu-Multiarch (crossbuild-essential-arm64
+# + :arm64-Pakete ins System installiert) existiert kein befuelltes Sysroot
+# unter /usr/aarch64-linux-gnu. Die ARM64-Libs liegen unter
+# /usr/lib/aarch64-linux-gnu, Header unter /usr/include und
+# /usr/include/aarch64-linux-gnu.
+#
+# MODE_LIBRARY/INCLUDE/PACKAGE auf BOTH, damit CMake sowohl Multiarch-
+# Pfade als auch Host-Pfade findet. ONLY wuerde auf den (leeren)
+# CMAKE_FIND_ROOT_PATH einschraenken und nichts finden.
 # ------------------------------------------------------------
 cat > /tmp/aarch64-toolchain.cmake <<'EOF'
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
 set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
 set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
-set(CMAKE_FIND_ROOT_PATH /usr/aarch64-linux-gnu)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 EOF
 export TOOLCHAIN=/tmp/aarch64-toolchain.cmake
 
