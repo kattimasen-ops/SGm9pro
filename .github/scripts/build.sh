@@ -55,10 +55,6 @@ aarch64-linux-gnu-gcc --version | head -1
 
 # ------------------------------------------------------------
 # 3. Umgebungsvariablen - OPTIMIERT FUER CORTEX-A35
-#    Alle urspruenglichen Flags bleiben erhalten.
-#    Hinweis: KEIN -mfpu=* auf AArch64 - NEON ist architektonisch
-#    verpflichtend und wird durch -mcpu=cortex-a35 implizit aktiviert.
-#    -O3 -ftree-vectorize steuern die automatische NEON-Vektorisierung.
 # ------------------------------------------------------------
 export OPTIMIZE="-O3 -mcpu=cortex-a35 -mtune=cortex-a35 \
 -pipe -fomit-frame-pointer -ffast-math -ftree-vectorize \
@@ -102,16 +98,6 @@ cmake --version
 
 # ------------------------------------------------------------
 # 5. Toolchain-File erzeugen (Multiarch-korrekt)
-#
-# KEIN CMAKE_FIND_ROOT_PATH: Bei Ubuntu-Multiarch (crossbuild-essential-arm64
-# + :arm64-Pakete ins System installiert) existiert kein befuelltes Sysroot
-# unter /usr/aarch64-linux-gnu. Die ARM64-Libs liegen unter
-# /usr/lib/aarch64-linux-gnu, Header unter /usr/include und
-# /usr/include/aarch64-linux-gnu.
-#
-# MODE_LIBRARY/INCLUDE/PACKAGE auf BOTH, damit CMake sowohl Multiarch-
-# Pfade als auch Host-Pfade findet. ONLY wuerde auf den (leeren)
-# CMAKE_FIND_ROOT_PATH einschraenken und nichts finden.
 # ------------------------------------------------------------
 cat > /tmp/aarch64-toolchain.cmake <<'EOF'
 set(CMAKE_SYSTEM_NAME Linux)
@@ -187,13 +173,64 @@ cp "${SDL12_LIB}" "${OUT_LIBS}/libSDL-1.2.so.0"
 
 # ------------------------------------------------------------
 # 9. Smokin' Guns (Cross-Compile, mit patch_arm64.py)
-#     COMPILE_ARCH wird gesetzt, um Cross-Compile korrekt zu signalisieren
 # ------------------------------------------------------------
 echo "==> Building Smokin' Guns"
 cd "${SRC_DIR}"
 git clone --depth=1 https://github.com/smokin-guns/SmokinGuns.git
 cd SmokinGuns
 python3 /work/.github/scripts/patch_arm64.py
+
+# ------------------------------------------------------------
+# 9b. PURE-SERVER BYPASS
+#     - FS_ReferencedPakPureChecksums: fake-but-consistent checksums
+#     - FS_FindVM: !fs_numServerPaks check wird auf 0 gesetzt
+#     Nur files.c wird veraendert, sonst nichts.
+# ------------------------------------------------------------
+echo "==> Applying pure-server bypass (files.c)"
+python3 - <<'PYEOF'
+import re, sys
+from pathlib import Path
+
+fc = Path("code/qcommon/files.c")
+if not fc.exists():
+    for p in Path("code").rglob("files.c"):
+        fc = p
+        break
+if not fc.exists():
+    print("[bypass] files.c not found", file=sys.stderr)
+    sys.exit(1)
+
+src = fc.read_text()
+orig = src
+
+# ---- 1) FS_ReferencedPakPureChecksums -> fake checksums ----------
+pat = re.compile(
+    r'(FS_ReferencedPakPureChecksums\s*\([^)]*\)\s*\{)(.*?)(\n\})',
+    re.DOTALL,
+)
+def _fake(m):
+    body = (
+        "\n\t/* ==== PURE_BYPASS: fake but consistent checksums ==== */\n"
+        "\tfor (int i = 0; i < numPaks; i++) {\n"
+        "\t\tchecksums[i] = 0x12345678 + i;\n"
+        "\t}\n"
+        "\treturn;\n"
+    )
+    return m.group(1) + body + m.group(3)
+
+src, n1 = pat.subn(_fake, src, count=1)
+
+# ---- 2) FS_FindVM: !fs_numServerPaks -> 0 ------------------------
+src, n2 = re.subn(r'!\s*fs_numServerPaks', '0 /*PURE_BYPASS*/', src)
+
+if src == orig:
+    print("[bypass] WARNING: nothing changed", file=sys.stderr)
+
+fc.write_text(src)
+print(f"[bypass] FS_ReferencedPakPureChecksums patched: {n1}")
+print(f"[bypass] !fs_numServerPaks neutralized:        {n2}")
+PYEOF
+# ------------------------------------------------------------
 
 make release -j$(nproc) \
   PLATFORM=linux \
