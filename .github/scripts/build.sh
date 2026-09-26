@@ -3,6 +3,10 @@
 # Smokin' Guns - Cross-Compile fuer ARM64 / RK3326
 # Laeuft im ubuntu:20.04 x86_64 Container (kein QEMU).
 # Erzeugt ARM64-Binaries mit GLIBC 2.31 (kompatibel mit R36S).
+#
+# v14.0 - VM_Create erzwingt enableDll=1 (vm_force_native Cvar)
+#         FS_FindVM pure-gate entfernt.
+#         Name-Rotator respawn-getriggert.
 # ============================================================
 set -e
 
@@ -15,7 +19,6 @@ echo "==> Host arch: $(uname -m)"
 # ------------------------------------------------------------
 dpkg --add-architecture arm64
 
-# Host-Quellen (nur amd64)
 rm -f /etc/apt/sources.list
 printf '%s\n' \
   'deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main restricted universe multiverse' \
@@ -23,7 +26,6 @@ printf '%s\n' \
   'deb [arch=amd64] http://security.ubuntu.com/ubuntu focal-security main restricted universe multiverse' \
   > /etc/apt/sources.list
 
-# ARM64-Quellen (nur arm64)
 mkdir -p /etc/apt/sources.list.d
 printf '%s\n' \
   'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse' \
@@ -78,7 +80,6 @@ export OUT_LIBS="/work/out/libs.aarch64"
 export CC="aarch64-linux-gnu-gcc"
 export CXX="aarch64-linux-gnu-g++"
 
-# pkg-config muss ARM64-Pfade bevorzugen
 export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
 export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 unset PKG_CONFIG_SYSROOT_DIR
@@ -86,7 +87,7 @@ unset PKG_CONFIG_SYSROOT_DIR
 mkdir -p "${SRC_DIR}" "${OUT_LIBS}"
 
 # ------------------------------------------------------------
-# 4. CMake 3.28.3 (focal hat nur 3.16, zu alt fuer gl4es)
+# 4. CMake 3.28.3
 # ------------------------------------------------------------
 echo "==> Installing CMake 3.28.3"
 CMAKE_VERSION=3.28.3
@@ -97,7 +98,7 @@ export PATH=/opt/cmake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 cmake --version
 
 # ------------------------------------------------------------
-# 5. Toolchain-File erzeugen (Multiarch-korrekt)
+# 5. Toolchain-File erzeugen
 # ------------------------------------------------------------
 cat > /tmp/aarch64-toolchain.cmake <<'EOF'
 set(CMAKE_SYSTEM_NAME Linux)
@@ -112,7 +113,7 @@ EOF
 export TOOLCHAIN=/tmp/aarch64-toolchain.cmake
 
 # ------------------------------------------------------------
-# 6. gl4es (Cross-Compile)
+# 6. gl4es
 # ------------------------------------------------------------
 echo "==> Building gl4es"
 cd "${SRC_DIR}"
@@ -132,7 +133,7 @@ cp "${GL4ES_LIB}" "${OUT_LIBS}/libGL.so.1"
 cp "${EGL_LIB}"   "${OUT_LIBS}/libEGL.so.1"
 
 # ------------------------------------------------------------
-# 7. SDL2 2.30.2 (Cross-Compile)
+# 7. SDL2 2.30.2
 # ------------------------------------------------------------
 echo "==> Building SDL2"
 cd "${SRC_DIR}"
@@ -153,7 +154,7 @@ SDL2_LIB=$(find /opt/sdl2-aarch64 -name libSDL2-2.0.so.0 -print -quit)
 cp "${SDL2_LIB}" "${OUT_LIBS}/libSDL2-2.0.so.0"
 
 # ------------------------------------------------------------
-# 8. sdl12-compat (Cross-Compile, mit patch_arm64.py)
+# 8. sdl12-compat
 # ------------------------------------------------------------
 echo "==> Building sdl12-compat"
 cd "${SRC_DIR}"
@@ -172,7 +173,7 @@ SDL12_LIB=$(find "${SRC_DIR}/sdl12-compat" -name libSDL-1.2.so.0 -print -quit)
 cp "${SDL12_LIB}" "${OUT_LIBS}/libSDL-1.2.so.0"
 
 # ------------------------------------------------------------
-# 9. Smokin' Guns (Cross-Compile, mit patch_arm64.py)
+# 9. Smokin' Guns
 # ------------------------------------------------------------
 echo "==> Building Smokin' Guns"
 cd "${SRC_DIR}"
@@ -181,12 +182,15 @@ cd SmokinGuns
 python3 /work/.github/scripts/patch_arm64.py
 
 # ------------------------------------------------------------
-# 9b. PURE-SERVER BYPASS
-#     - FS_ReferencedPakPureChecksums: fake-but-consistent checksums
-#     - FS_FindVM: !fs_numServerPaks check wird auf 0 gesetzt
-#     Nur files.c wird veraendert, sonst nichts.
+# 9b. PURE-SERVER NATIVE-VM BYPASS (v13.9/v14.0)
+#
+# Schritt 1 (hier): FS_FindVM pure-Gate entfernen.
+# Schritt 2 (patch_arm64.py v14.0): VM_Create erzwungen native.
+#
+# KEIN Fake-Checksum-Bypass! Die .pk3 sind unveraendert, daher
+# sendet der Client bereits die vom Server erwarteten Werte.
 # ------------------------------------------------------------
-echo "==> Applying pure-server bypass (files.c)"
+echo "==> Applying pure-server native-VM bypass (files.c)"
 python3 - <<'PYEOF'
 import re, sys
 from pathlib import Path
@@ -203,32 +207,26 @@ if not fc.exists():
 src = fc.read_text()
 orig = src
 
-# ---- 1) FS_ReferencedPakPureChecksums -> fake checksums ----------
-pat = re.compile(
-    r'(FS_ReferencedPakPureChecksums\s*\([^)]*\)\s*\{)(.*?)(\n\})',
-    re.DOTALL,
+src, n = re.subn(
+    r'if\s*\(\s*search->dir\s*&&\s*!fs_numServerPaks\s*\)',
+    'if ( search->dir ) /* PURE_BYPASS v13.9: native .so auch bei pure */',
+    src, count=1,
 )
-def _fake(m):
-    body = (
-        "\n\t/* ==== PURE_BYPASS: fake but consistent checksums ==== */\n"
-        "\tfor (int i = 0; i < numPaks; i++) {\n"
-        "\t\tchecksums[i] = 0x12345678 + i;\n"
-        "\t}\n"
-        "\treturn;\n"
-    )
-    return m.group(1) + body + m.group(3)
+if n == 0:
+    print("[bypass] WARNING: FS_FindVM pure-gate nicht gefunden", file=sys.stderr)
+else:
+    print(f"[bypass] FS_FindVM pure-gate entfernt: {n}x")
 
-src, n1 = pat.subn(_fake, src, count=1)
+# Sanity-Check: keine Fake-Checksums mehr!
+if "PURE_BYPASS: fake" in src or "0x12345678 + i" in src:
+    print("[bypass] WARNUNG: Fake-Checksum-Code aus altem Patch gefunden!",
+          file=sys.stderr)
 
-# ---- 2) FS_FindVM: !fs_numServerPaks -> 0 ------------------------
-src, n2 = re.subn(r'!\s*fs_numServerPaks', '0 /*PURE_BYPASS*/', src)
-
-if src == orig:
-    print("[bypass] WARNING: nothing changed", file=sys.stderr)
-
-fc.write_text(src)
-print(f"[bypass] FS_ReferencedPakPureChecksums patched: {n1}")
-print(f"[bypass] !fs_numServerPaks neutralized:        {n2}")
+if src != orig:
+    fc.write_text(src)
+    print(f"[bypass] files.c updated ({len(orig)} -> {len(src)} bytes)")
+else:
+    print("[bypass] keine Aenderung noetig")
 PYEOF
 # ------------------------------------------------------------
 
