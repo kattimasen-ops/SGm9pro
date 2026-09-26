@@ -3,10 +3,6 @@
 # Smokin' Guns - Cross-Compile fuer ARM64 / RK3326
 # Laeuft im ubuntu:20.04 x86_64 Container (kein QEMU).
 # Erzeugt ARM64-Binaries mit GLIBC 2.31 (kompatibel mit R36S).
-#
-# v14.0 - VM_Create erzwingt enableDll=1 (vm_force_native Cvar)
-#         FS_FindVM pure-gate entfernt.
-#         Name-Rotator respawn-getriggert.
 # ============================================================
 set -e
 
@@ -182,13 +178,9 @@ cd SmokinGuns
 python3 /work/.github/scripts/patch_arm64.py
 
 # ------------------------------------------------------------
-# 9b. PURE-SERVER NATIVE-VM BYPASS (v13.9/v14.0)
-#
-# Schritt 1 (hier): FS_FindVM pure-Gate entfernen.
-# Schritt 2 (patch_arm64.py v14.0): VM_Create erzwungen native.
-#
-# KEIN Fake-Checksum-Bypass! Die .pk3 sind unveraendert, daher
-# sendet der Client bereits die vom Server erwarteten Werte.
+# 9b. PURE-SERVER NATIVE-VM BYPASS
+#     Entfernt das !fs_numServerPaks-Gate in FS_FindVM.
+#     KEIN Fake-Checksum-Bypass noetig (pk3 unveraendert).
 # ------------------------------------------------------------
 echo "==> Applying pure-server native-VM bypass (files.c)"
 python3 - <<'PYEOF'
@@ -217,19 +209,14 @@ if n == 0:
 else:
     print(f"[bypass] FS_FindVM pure-gate entfernt: {n}x")
 
-# Sanity-Check: keine Fake-Checksums mehr!
-if "PURE_BYPASS: fake" in src or "0x12345678 + i" in src:
-    print("[bypass] WARNUNG: Fake-Checksum-Code aus altem Patch gefunden!",
-          file=sys.stderr)
-
 if src != orig:
     fc.write_text(src)
     print(f"[bypass] files.c updated ({len(orig)} -> {len(src)} bytes)")
-else:
-    print("[bypass] keine Aenderung noetig")
 PYEOF
-# ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# 10. Build
+# ------------------------------------------------------------
 make release -j$(nproc) \
   PLATFORM=linux \
   ARCH=aarch64 \
@@ -255,7 +242,7 @@ make release -j$(nproc) \
   LDFLAGS="${LDFLAGS}"
 
 # ------------------------------------------------------------
-# 10. Bibliotheken neben die Binaerdateien
+# 11. Bibliotheken neben die Binaerdateien
 # ------------------------------------------------------------
 REL_DIR="${SRC_DIR}/SmokinGuns/build/release-linux-aarch64"
 cp "${OUT_LIBS}"/*.so* "${REL_DIR}/"
